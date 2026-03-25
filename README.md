@@ -30,3 +30,4 @@ docker compose up --build
 ```
 
 The app stores all project data in [`data`](./data), mounted into the container at `/app/data`.
+Default port is 3001 of the docker cointainer.
