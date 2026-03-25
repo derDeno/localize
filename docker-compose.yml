@@ -1,0 +1,11 @@
+services:
+  localize:
+    build: .
+    container_name: localize
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./data:/app/data
+    environment:
+      PORT: 3001
+      DATA_DIR: /app/data

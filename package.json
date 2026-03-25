@@ -1,0 +1,32 @@
+{
+  "name": "localize",
+  "version": "1.0.0",
+  "description": "Modern i18n JSON translation workspace",
+  "main": "server/server.js",
+  "scripts": {
+    "dev": "concurrently \"node server/server.js\" \"vite\"",
+    "build": "vite build",
+    "start": "node server/server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "archiver": "^7.0.1",
+    "express": "^5.2.1",
+    "multer": "^2.1.1",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/multer": "^2.1.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "concurrently": "^9.2.1",
+    "typescript": "^6.0.2",
+    "vite": "^8.0.2"
+  }
+}
