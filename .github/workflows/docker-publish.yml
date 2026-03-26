@@ -60,8 +60,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=${{ steps.ref.outputs.tag_prefix }}
             type=raw,value=${{ steps.ref.outputs.extra_tag }}
+            type=raw,value=${{ steps.ref.outputs.tag_prefix }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
