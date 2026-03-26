@@ -61,6 +61,7 @@ The app container supports these main environment variables:
 - `POSTGRES_PASSWORD`
 - `DATABASE_URL` as an override if you prefer one connection string
 - `SESSION_SECRET`
+- `SESSION_COOKIE_SECURE` to force secure cookies on or off. Set this to `false` when you serve the Docker app over plain `http://`.
 - `ADMIN_EMAIL`
 - `ADMIN_PASSWORD`
 

@@ -16,6 +16,10 @@ module.exports = {
       process.env.POSTGRES_DB || "localize"
     }`,
   SESSION_SECRET: process.env.SESSION_SECRET || "change-me-localize-session-secret",
+  SESSION_COOKIE_SECURE:
+    process.env.SESSION_COOKIE_SECURE === undefined
+      ? process.env.NODE_ENV === "production"
+      : process.env.SESSION_COOKIE_SECURE === "true",
   ADMIN_EMAIL: process.env.ADMIN_EMAIL || "admin@localize.local",
   ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || "admin123!",
 };

@@ -101,6 +101,7 @@ function AppProvider({ children }) {
         settings: payload.settings,
         error: "",
       });
+      return payload;
     } catch (error) {
       setBootstrap({
         loading: false,
@@ -108,6 +109,7 @@ function AppProvider({ children }) {
         settings: null,
         error: error.message,
       });
+      throw error;
     }
   }
 
@@ -275,7 +277,10 @@ function LoginPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form),
       });
-      await refreshBootstrap();
+      const bootstrap = await refreshBootstrap();
+      if (!bootstrap?.user) {
+        throw new Error("Sign-in worked, but the session cookie was not accepted by the browser.");
+      }
       navigate("/");
     } catch (submitError) {
       setError(submitError.message);

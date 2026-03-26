@@ -13,6 +13,7 @@ const {
   LIBRARY_DIR,
   PORT,
   PROJECTS_DIR,
+  SESSION_COOKIE_SECURE,
   SESSION_SECRET,
 } = require("./config");
 
@@ -789,7 +790,7 @@ app.post("/api/auth/login", async (req, res, next) => {
     res.cookie(SESSION_COOKIE, token, {
       httpOnly: true,
       sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
+      secure: SESSION_COOKIE_SECURE,
       maxAge: 1000 * 60 * 60 * 24 * 7,
     });
 
@@ -800,7 +801,11 @@ app.post("/api/auth/login", async (req, res, next) => {
 });
 
 app.post("/api/auth/logout", (req, res) => {
-  res.clearCookie(SESSION_COOKIE);
+  res.clearCookie(SESSION_COOKIE, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: SESSION_COOKIE_SECURE,
+  });
   res.status(204).end();
 });
 

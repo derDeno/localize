@@ -33,6 +33,7 @@ services:
       POSTGRES_USER: localize
       POSTGRES_PASSWORD: localize
       SESSION_SECRET: change-me-in-production
+      SESSION_COOKIE_SECURE: "false"
       ADMIN_EMAIL: admin@localize.local
       ADMIN_PASSWORD: admin123!
 
