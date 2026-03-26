@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - dev
+      - standalone
   schedule:
     - cron: "0 2 * * *"
   workflow_dispatch:
@@ -27,7 +28,11 @@ jobs:
           if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.ref_name }}" = "dev" ]; then
             echo "git_ref=dev" >> "$GITHUB_OUTPUT"
             echo "tag_prefix=nightly" >> "$GITHUB_OUTPUT"
-            echo "extra_tag=nightly-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+            echo "extra_tag=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.ref_name }}" = "standalone" ]; then
+            echo "git_ref=standalone" >> "$GITHUB_OUTPUT"
+            echo "tag_prefix=standalone" >> "$GITHUB_OUTPUT"
+            echo "extra_tag=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
           else
             echo "git_ref=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
             echo "tag_prefix=latest" >> "$GITHUB_OUTPUT"
