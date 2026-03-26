@@ -47,6 +47,9 @@ This starts:
 The app stores exported JSON snapshots and library files in [`data`](./data), mounted into the container at `/app/data`.
 Default app port is `3001`.
 
+For PostgreSQL 18.x, the official Docker image moved its default `PGDATA` to a versioned path under `/var/lib/postgresql`, so the Compose file mounts the volume at `/var/lib/postgresql` and sets `PGDATA=/var/lib/postgresql/18/docker`.
+If you are upgrading from an older Compose setup that mounted `/var/lib/postgresql/data`, migrate the existing volume contents into the new `18/docker` subdirectory before reusing that volume.
+
 ## Environment
 
 The app container supports these main environment variables:

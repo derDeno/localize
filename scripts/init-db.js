@@ -9,6 +9,14 @@ const {
 
 const ADMIN_FIRST_NAME = "System";
 const ADMIN_LAST_NAME = "Admin";
+const DB_CONNECT_RETRIES = Number(process.env.DB_CONNECT_RETRIES || 30);
+const DB_CONNECT_RETRY_DELAY_MS = Number(process.env.DB_CONNECT_RETRY_DELAY_MS || 2000);
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
 
 function hashPassword(password) {
   return new Promise((resolve, reject) => {
@@ -33,9 +41,32 @@ async function ensureMigrationsTable(client) {
   `);
 }
 
+async function withDatabaseRetry(operation) {
+  let lastError;
+
+  for (let attempt = 1; attempt <= DB_CONNECT_RETRIES; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+
+      if (attempt === DB_CONNECT_RETRIES) {
+        break;
+      }
+
+      console.warn(
+        `Database not ready yet (attempt ${attempt}/${DB_CONNECT_RETRIES}): ${error.message}`,
+      );
+      await sleep(DB_CONNECT_RETRY_DELAY_MS);
+    }
+  }
+
+  throw lastError;
+}
+
 async function applyMigrations() {
   const migrationsDir = path.join(__dirname, "..", "server", "db", "migrations");
-  const client = await pool.connect();
+  const client = await withDatabaseRetry(() => pool.connect());
 
   try {
     await client.query("BEGIN");
@@ -124,8 +155,8 @@ async function seedAdminUser() {
 
 async function main() {
   await applyMigrations();
-  await seedSettings();
-  await seedAdminUser();
+  await withDatabaseRetry(seedSettings);
+  await withDatabaseRetry(seedAdminUser);
   await pool.end();
 }
 
