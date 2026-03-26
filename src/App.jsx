@@ -1,40 +1,55 @@
-import { useEffect, useMemo, useState } from "react";
-import { BrowserRouter, Link, Navigate, Route, Routes, useNavigate, useParams } from "react-router-dom";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Link,
+  NavLink,
+  Navigate,
+  Outlet,
+  Route,
+  RouterProvider,
+  useBeforeUnload,
+  useBlocker,
+  useNavigate,
+  useOutletContext,
+  useParams,
+  createBrowserRouter,
+  createRoutesFromElements,
+} from "react-router-dom";
 
 const languageMeta = {
-  ar: { flag: "🇸🇦", name: "Arabic" },
-  bg: { flag: "🇧🇬", name: "Bulgarian" },
-  cs: { flag: "🇨🇿", name: "Czech" },
-  da: { flag: "🇩🇰", name: "Danish" },
-  de: { flag: "🇩🇪", name: "German" },
-  el: { flag: "🇬🇷", name: "Greek" },
-  en: { flag: "🇬🇧", name: "English" },
-  es: { flag: "🇪🇸", name: "Spanish" },
-  et: { flag: "🇪🇪", name: "Estonian" },
-  fi: { flag: "🇫🇮", name: "Finnish" },
-  fr: { flag: "🇫🇷", name: "French" },
-  he: { flag: "🇮🇱", name: "Hebrew" },
-  hi: { flag: "🇮🇳", name: "Hindi" },
-  hu: { flag: "🇭🇺", name: "Hungarian" },
-  it: { flag: "🇮🇹", name: "Italian" },
-  ja: { flag: "🇯🇵", name: "Japanese" },
-  ko: { flag: "🇰🇷", name: "Korean" },
-  nl: { flag: "🇳🇱", name: "Dutch" },
-  no: { flag: "🇳🇴", name: "Norwegian" },
-  pl: { flag: "🇵🇱", name: "Polish" },
-  pt: { flag: "🇵🇹", name: "Portuguese" },
-  ro: { flag: "🇷🇴", name: "Romanian" },
-  ru: { flag: "🇷🇺", name: "Russian" },
-  sk: { flag: "🇸🇰", name: "Slovak" },
-  sl: { flag: "🇸🇮", name: "Slovenian" },
-  sv: { flag: "🇸🇪", name: "Swedish" },
-  tr: { flag: "🇹🇷", name: "Turkish" },
-  uk: { flag: "🇺🇦", name: "Ukrainian" },
-  zh: { flag: "🇨🇳", name: "Chinese" },
+  ar: { countryCode: "sa", name: "Arabic" },
+  bg: { countryCode: "bg", name: "Bulgarian" },
+  cs: { countryCode: "cz", name: "Czech" },
+  da: { countryCode: "dk", name: "Danish" },
+  de: { countryCode: "de", name: "German" },
+  el: { countryCode: "gr", name: "Greek" },
+  en: { countryCode: "gb", name: "English" },
+  es: { countryCode: "es", name: "Spanish" },
+  et: { countryCode: "ee", name: "Estonian" },
+  fi: { countryCode: "fi", name: "Finnish" },
+  fr: { countryCode: "fr", name: "French" },
+  he: { countryCode: "il", name: "Hebrew" },
+  hi: { countryCode: "in", name: "Hindi" },
+  hu: { countryCode: "hu", name: "Hungarian" },
+  it: { countryCode: "it", name: "Italian" },
+  ja: { countryCode: "jp", name: "Japanese" },
+  ko: { countryCode: "kr", name: "Korean" },
+  nl: { countryCode: "nl", name: "Dutch" },
+  no: { countryCode: "no", name: "Norwegian" },
+  pl: { countryCode: "pl", name: "Polish" },
+  pt: { countryCode: "pt", name: "Portuguese" },
+  ro: { countryCode: "ro", name: "Romanian" },
+  ru: { countryCode: "ru", name: "Russian" },
+  sk: { countryCode: "sk", name: "Slovak" },
+  sl: { countryCode: "si", name: "Slovenian" },
+  sv: { countryCode: "se", name: "Swedish" },
+  tr: { countryCode: "tr", name: "Turkish" },
+  uk: { countryCode: "ua", name: "Ukrainian" },
+  zh: { countryCode: "cn", name: "Chinese" },
 };
 
 const initialProjectForm = {
   name: "",
+  description: "",
   sourceLanguage: "en",
   sourceLabel: "English",
 };
@@ -44,7 +59,7 @@ function languageDisplay(code, fallbackLabel) {
   const meta = languageMeta[normalized];
   return {
     code: normalized,
-    flag: meta?.flag || "🌐",
+    countryCode: meta?.countryCode || null,
     label: fallbackLabel || meta?.name || normalized.toUpperCase(),
   };
 }
@@ -73,12 +88,101 @@ function getSystemTheme() {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
-function App() {
+function FlagIcon({ countryCode, label, className = "" }) {
+  if (!countryCode) {
+    return (
+      <span className={`flag-fallback ${className}`.trim()} aria-hidden="true">
+        ●
+      </span>
+    );
+  }
+
   return (
-    <BrowserRouter>
-      <AppShell />
-    </BrowserRouter>
+    <span
+      className={`fi fi-${countryCode} flag-icon ${className}`.trim()}
+      aria-hidden="true"
+      title={label}
+    />
   );
+}
+
+function FlagSelect({ label, value, options, onChange }) {
+  const detailsRef = useRef(null);
+  const selectedOption = options.find((option) => option.code === value) || options[0];
+
+  return (
+    <label className="flag-select-field">
+      {label ? <span>{label}</span> : null}
+      <details className="flag-select" ref={detailsRef}>
+        <summary className="flag-select-trigger">
+          <span className="flag-select-value">
+            {selectedOption ? (
+              <>
+                <FlagIcon countryCode={selectedOption.countryCode} label={selectedOption.label} />
+                <span>
+                  {selectedOption.label} ({selectedOption.code.toUpperCase()})
+                </span>
+              </>
+            ) : (
+              <span>Select a language</span>
+            )}
+          </span>
+          <span className="flag-select-chevron" aria-hidden="true">
+            ▾
+          </span>
+        </summary>
+
+        <div className="flag-select-menu">
+          {options.map((option) => (
+            <button
+              key={option.code}
+              className={`flag-select-option${option.code === value ? " active" : ""}`}
+              type="button"
+              onClick={() => {
+                onChange(option.code);
+                detailsRef.current?.removeAttribute("open");
+              }}
+            >
+              <FlagIcon countryCode={option.countryCode} label={option.label} />
+              <span>
+                {option.label} ({option.code.toUpperCase()})
+              </span>
+            </button>
+          ))}
+        </div>
+      </details>
+    </label>
+  );
+}
+
+function SunIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="switch-glyph">
+      <circle cx="12" cy="12" r="4.5" fill="currentColor" />
+      <path
+        d="M12 2.5v2.5M12 19v2.5M21.5 12H19M5 12H2.5M18.7 5.3l-1.8 1.8M7.1 16.9l-1.8 1.8M18.7 18.7l-1.8-1.8M7.1 7.1 5.3 5.3"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function MoonIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="switch-glyph">
+      <path
+        d="M14.8 3.2a8.7 8.7 0 1 0 6 14.8A9.8 9.8 0 0 1 14.8 3.2Z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
+function App() {
+  return <RouterProvider router={appRouter} />;
 }
 
 function AppShell() {
@@ -86,6 +190,7 @@ function AppShell() {
   const [themePreference, setThemePreference] = useState(() => localStorage.getItem("localize-theme"));
   const [systemTheme, setSystemTheme] = useState(getSystemTheme);
   const [toast, setToast] = useState(null);
+  const [showBackToTop, setShowBackToTop] = useState(false);
   const [refreshSeed, setRefreshSeed] = useState(0);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [isProjectFileHovering, setIsProjectFileHovering] = useState(false);
@@ -125,6 +230,17 @@ function AppShell() {
 
     return () => window.clearTimeout(timeoutId);
   }, [toast]);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      setShowBackToTop(window.scrollY > 320);
+    };
+
+    handleScroll();
+    window.addEventListener("scroll", handleScroll, { passive: true });
+
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
 
   function showToast(kind, text) {
     setToast({
@@ -171,6 +287,7 @@ function AppShell() {
     try {
       const formData = new FormData();
       formData.set("name", projectForm.name);
+      formData.set("description", projectForm.description);
       formData.set("sourceLanguage", projectForm.sourceLanguage.trim().toLowerCase());
       formData.set(
         "sourceLabel",
@@ -214,34 +331,33 @@ function AppShell() {
         </div>
 
         <nav className="topbar-menu" aria-label="Primary">
-          <Link className="menu-link" to="/">
+          <NavLink className={({ isActive }) => `menu-link${isActive ? " active" : ""}`} to="/">
             Dashboard
-          </Link>
+          </NavLink>
         </nav>
 
         <div className="topbar-actions">
           <label className="theme-switch">
-            <span>{theme === "dark" ? "Dark" : "Light"}</span>
             <button
               type="button"
               className="switch"
               aria-label="Toggle dark mode"
+              aria-pressed={theme === "dark"}
               onClick={() => {
                 const nextTheme = theme === "dark" ? "light" : "dark";
                 setThemePreference(nextTheme);
                 localStorage.setItem("localize-theme", nextTheme);
               }}
             >
+              <span className="switch-icon switch-icon-sun" aria-hidden="true">
+                <SunIcon />
+              </span>
               <span className="switch-thumb" />
+              <span className="switch-icon switch-icon-moon" aria-hidden="true">
+                <MoonIcon />
+              </span>
             </button>
           </label>
-
-          <button className="primary-button" type="button" onClick={openCreateDialog}>
-            <span className="button-icon" aria-hidden="true">
-              ＋
-            </span>
-            Create project
-          </button>
         </div>
       </header>
 
@@ -251,34 +367,35 @@ function AppShell() {
         </div>
       )}
 
+      {showBackToTop && (
+        <button
+          className="back-to-top"
+          type="button"
+          aria-label="Back to top"
+          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+        >
+          ‹
+        </button>
+      )}
+
       <main className="page-shell">
-        <Routes>
-          <Route
-            path="/"
-            element={<DashboardPage refreshSeed={refreshSeed} onCreateProject={openCreateDialog} />}
-          />
-          <Route
-            path="/projects/:projectId"
-            element={<ProjectPage onNotify={showToast} />}
-          />
-          <Route
-            path="/projects/:projectId/languages/:languageCode/edit"
-            element={<EditorPage onNotify={showToast} />}
-          />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+        <Outlet context={{ refreshSeed, openCreateDialog, showToast }} />
       </main>
 
       {isCreateDialogOpen && (
-        <div className="dialog-backdrop" onClick={closeCreateDialog}>
+        <div className="dialog-backdrop">
           <div className="dialog panel" onClick={(event) => event.stopPropagation()}>
             <div className="dialog-header">
               <div>
-                <p className="eyebrow">New project</p>
                 <h2>Create project</h2>
               </div>
-              <button className="ghost-button" type="button" onClick={closeCreateDialog}>
-                Close
+              <button
+                className="ghost-button dialog-close"
+                type="button"
+                aria-label="Close dialog"
+                onClick={closeCreateDialog}
+              >
+                ×
               </button>
             </div>
 
@@ -295,25 +412,32 @@ function AppShell() {
               </label>
 
               <label>
-                <span>Source language</span>
-                <select
-                  value={projectForm.sourceLanguage}
-                  onChange={(event) => {
-                    const nextCode = event.target.value;
-                    setProjectForm((current) => ({
-                      ...current,
-                      sourceLanguage: nextCode,
-                      sourceLabel: languageDisplay(nextCode).label,
-                    }));
-                  }}
-                >
-                  {Object.entries(languageMeta).map(([code, meta]) => (
-                    <option key={code} value={code}>
-                      {meta.flag} {meta.name} ({code.toUpperCase()})
-                    </option>
-                  ))}
-                </select>
+                <span>Description</span>
+                <textarea
+                  rows="4"
+                  value={projectForm.description}
+                  onChange={(event) =>
+                    setProjectForm((current) => ({ ...current, description: event.target.value }))
+                  }
+                />
               </label>
+
+              <FlagSelect
+                label="Source language"
+                value={projectForm.sourceLanguage}
+                options={Object.entries(languageMeta).map(([code, meta]) => ({
+                  code,
+                  label: meta.name,
+                  countryCode: meta.countryCode,
+                }))}
+                onChange={(nextCode) => {
+                  setProjectForm((current) => ({
+                    ...current,
+                    sourceLanguage: nextCode,
+                    sourceLabel: languageDisplay(nextCode).label,
+                  }));
+                }}
+              />
 
               <label>
                 <span>Source file</span>
@@ -354,7 +478,8 @@ function AppShell() {
   );
 }
 
-function DashboardPage({ refreshSeed, onCreateProject }) {
+function DashboardPage() {
+  const { refreshSeed, openCreateDialog } = useOutletContext();
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -397,7 +522,7 @@ function DashboardPage({ refreshSeed, onCreateProject }) {
           <h2>Projects</h2>
           <p className="muted">Open a project card to manage languages and translations.</p>
         </div>
-        <button className="primary-button" type="button" onClick={onCreateProject}>
+        <button className="primary-button" type="button" onClick={openCreateDialog}>
           <span className="button-icon" aria-hidden="true">
             ＋
           </span>
@@ -417,22 +542,35 @@ function DashboardPage({ refreshSeed, onCreateProject }) {
           <p className="muted">Create your first project to start translating JSON files.</p>
         </section>
       ) : (
-        <section className="cards-grid">
+        <section className="dashboard-grid">
           {projects.map((project) => (
-            <Link key={project.id} className="project-card panel" to={`/projects/${project.id}`}>
+            <article key={project.id} className="project-card panel">
               <div className="card-top">
                 <strong>{project.name}</strong>
-                <span className="pill">{project.sourceLanguage.toUpperCase()}</span>
+                <div className="card-badges">
+                  {project.version ? <span className="pill">v{project.version}</span> : null}
+                  <span className="pill">{project.sourceLanguage.toUpperCase()}</span>
+                </div>
               </div>
+              {project.description ? <p className="muted">{project.description}</p> : null}
               <p className="muted">{project.languages.length} languages</p>
               <div className="mini-flags">
                 {project.languages.slice(0, 5).map((language) => (
                   <span key={language.code} title={language.label}>
-                    {languageDisplay(language.code, language.label).flag}
+                    <FlagIcon
+                      countryCode={languageDisplay(language.code, language.label).countryCode}
+                      label={language.label}
+                      className="mini-flag"
+                    />
                   </span>
                 ))}
               </div>
-            </Link>
+              <div className="project-card-actions">
+                <Link className="primary-button" to={`/projects/${project.id}`}>
+                  Open project
+                </Link>
+              </div>
+            </article>
           ))}
         </section>
       )}
@@ -440,13 +578,30 @@ function DashboardPage({ refreshSeed, onCreateProject }) {
   );
 }
 
-function ProjectPage({ onNotify }) {
+function ProjectPage() {
+  const { showToast } = useOutletContext();
+  const navigate = useNavigate();
   const { projectId } = useParams();
   const [project, setProject] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [selectedCode, setSelectedCode] = useState("");
+  const [projectSettings, setProjectSettings] = useState({
+    name: "",
+    description: "",
+    version: "",
+    sourceLanguage: "",
+  });
+  const [languageFile, setLanguageFile] = useState(null);
+  const [isLanguageFileHovering, setIsLanguageFileHovering] = useState(false);
+  const [sourceFile, setSourceFile] = useState(null);
+  const [isSourceFileHovering, setIsSourceFileHovering] = useState(false);
+  const [uploadingLanguageCode, setUploadingLanguageCode] = useState("");
+  const [deleteProjectOpen, setDeleteProjectOpen] = useState(false);
+  const [languageToDelete, setLanguageToDelete] = useState(null);
+  const [languageActionMenu, setLanguageActionMenu] = useState(null);
   const [busy, setBusy] = useState(false);
 
   const availableLanguages = useMemo(() => {
@@ -459,7 +614,7 @@ function ProjectPage({ onNotify }) {
       .map(([code, meta]) => ({
         code,
         label: meta.name,
-        flag: meta.flag,
+        countryCode: meta.countryCode,
       }));
   }, [project]);
 
@@ -475,6 +630,12 @@ function ProjectPage({ onNotify }) {
         if (active) {
           setProject(details);
           setSelectedCode((current) => current || details.languages.find((language) => !language.isSource)?.code || "");
+          setProjectSettings({
+            name: details.name || "",
+            description: details.description || "",
+            version: details.version || "",
+            sourceLanguage: details.sourceLanguage || "",
+          });
         }
       } catch (requestError) {
         if (active) {
@@ -505,6 +666,45 @@ function ProjectPage({ onNotify }) {
     );
   }, [availableLanguages]);
 
+  function resetCreateLanguageDialog() {
+    setLanguageFile(null);
+    setIsLanguageFileHovering(false);
+  }
+
+  function openCreateLanguageDialog() {
+    resetCreateLanguageDialog();
+    setIsDialogOpen(true);
+  }
+
+  function closeCreateLanguageDialog() {
+    setIsDialogOpen(false);
+    resetCreateLanguageDialog();
+  }
+
+  function openEditProjectDialog() {
+    setSourceFile(null);
+    setIsSourceFileHovering(false);
+    setIsEditDialogOpen(true);
+  }
+
+  function closeEditProjectDialog() {
+    setIsEditDialogOpen(false);
+    setSourceFile(null);
+    setIsSourceFileHovering(false);
+  }
+
+  function closeDeleteProjectDialog() {
+    setDeleteProjectOpen(false);
+  }
+
+  function closeDeleteLanguageDialog() {
+    setLanguageToDelete(null);
+  }
+
+  function closeLanguageActionMenu() {
+    setLanguageActionMenu(null);
+  }
+
   async function handleCreateLanguage(event) {
     event.preventDefault();
     if (!selectedCode) {
@@ -517,7 +717,12 @@ function ProjectPage({ onNotify }) {
       const formData = new FormData();
       formData.set("code", selectedCode);
       formData.set("label", languageDisplay(selectedCode).label);
-      formData.set("mode", "empty");
+      formData.set("mode", languageFile ? "upload" : "empty");
+
+      if (languageFile) {
+        formData.set("file", languageFile);
+        formData.set("fileName", languageFile.name);
+      }
 
       const updated = await apiFetch(`/api/projects/${projectId}/languages`, {
         method: "POST",
@@ -525,10 +730,122 @@ function ProjectPage({ onNotify }) {
       });
 
       setProject(updated);
-      setIsDialogOpen(false);
-      onNotify("success", "Language created.");
+      closeCreateLanguageDialog();
+      showToast("success", languageFile ? "Language added from uploaded file." : "Language added.");
     } catch (requestError) {
-      onNotify("error", requestError.message);
+      showToast("error", requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleUpdateProject(event) {
+    event.preventDefault();
+    setBusy(true);
+
+    try {
+      let updated = await apiFetch(`/api/projects/${projectId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: projectSettings.name,
+          description: projectSettings.description,
+          version: projectSettings.version,
+          sourceLanguage: projectSettings.sourceLanguage,
+        }),
+      });
+
+      if (sourceFile) {
+        const formData = new FormData();
+        formData.set("file", sourceFile);
+        formData.set("fileName", sourceFile.name);
+
+        updated = await apiFetch(`/api/projects/${projectId}/languages/${projectSettings.sourceLanguage}/upload`, {
+          method: "POST",
+          body: formData,
+        });
+      }
+
+      setProject(updated);
+      setProjectSettings({
+        name: updated.name || "",
+        description: updated.description || "",
+        version: updated.version || "",
+        sourceLanguage: updated.sourceLanguage || "",
+      });
+      closeEditProjectDialog();
+      showToast(
+        "success",
+        sourceFile ? "Project details and source file updated." : "Project details updated.",
+      );
+    } catch (requestError) {
+      showToast("error", requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleReplaceLanguageFile(languageCode, file) {
+    if (!file) {
+      return;
+    }
+
+    setUploadingLanguageCode(languageCode);
+
+    try {
+      const formData = new FormData();
+      formData.set("file", file);
+      formData.set("fileName", file.name);
+
+      const updated = await apiFetch(`/api/projects/${projectId}/languages/${languageCode}/upload`, {
+        method: "POST",
+        body: formData,
+      });
+
+      setProject(updated);
+      closeLanguageActionMenu();
+      showToast("success", "Translation file updated.");
+    } catch (requestError) {
+      showToast("error", requestError.message);
+    } finally {
+      setUploadingLanguageCode("");
+    }
+  }
+
+  async function handleDeleteProject() {
+    setBusy(true);
+
+    try {
+      await apiFetch(`/api/projects/${projectId}`, {
+        method: "DELETE",
+      });
+      closeDeleteProjectDialog();
+      showToast("success", "Project deleted.");
+      navigate("/");
+    } catch (requestError) {
+      showToast("error", requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDeleteLanguage() {
+    if (!languageToDelete) {
+      return;
+    }
+
+    setBusy(true);
+
+    try {
+      const updated = await apiFetch(`/api/projects/${projectId}/languages/${languageToDelete.code}`, {
+        method: "DELETE",
+      });
+      setProject(updated);
+      closeDeleteLanguageDialog();
+      closeLanguageActionMenu();
+      showToast("success", "Language deleted.");
+    } catch (requestError) {
+      showToast("error", requestError.message);
     } finally {
       setBusy(false);
     }
@@ -555,8 +872,28 @@ function ProjectPage({ onNotify }) {
       <div className="page-stack">
         <section className="page-hero panel">
           <div>
-            <p className="eyebrow">Project details</p>
-            <h2>{project.name}</h2>
+            <div className="project-hero-header">
+              <div>
+                <p className="eyebrow">Project details</p>
+                <div className="title-with-action">
+                  <h2>{project.name}</h2>
+                  <button
+                    className="title-action"
+                    type="button"
+                    aria-label="Edit project details"
+                    onClick={openEditProjectDialog}
+                  >
+                    ✎
+                  </button>
+                </div>
+              </div>
+              {project.version ? (
+                <div className="detail-badges">
+                  <span className="pill">v{project.version}</span>
+                </div>
+              ) : null}
+            </div>
+            {project.description ? <p className="muted">{project.description}</p> : null}
             <p className="muted">
               Source language: <strong>{project.sourceLanguage.toUpperCase()}</strong>
             </p>
@@ -566,19 +903,19 @@ function ProjectPage({ onNotify }) {
             <button
               className="primary-button"
               type="button"
-              onClick={() => setIsDialogOpen(true)}
+              onClick={openCreateLanguageDialog}
               disabled={!availableLanguages.length}
             >
               <span className="button-icon" aria-hidden="true">
                 ＋
               </span>
-              Create language
+              Add language
             </button>
             <a className="secondary-button" href={`/api/projects/${project.id}/download-all`}>
               <span className="button-icon" aria-hidden="true">
                 ⭳
               </span>
-              Download zip
+              Download all
             </a>
           </div>
         </section>
@@ -588,7 +925,7 @@ function ProjectPage({ onNotify }) {
             <h3>No languages yet</h3>
           </section>
         ) : (
-          <section className="cards-grid">
+          <section className="project-language-grid">
             {project.languages.map((language) => {
               const display = languageDisplay(language.code, language.label);
 
@@ -596,7 +933,7 @@ function ProjectPage({ onNotify }) {
                 <article key={language.code} className="language-card panel">
                   <div className="card-top">
                     <div className="lang-title">
-                      <span className="flag">{display.flag}</span>
+                      <FlagIcon countryCode={display.countryCode} label={display.label} className="flag" />
                       <div>
                         <strong>{display.label}</strong>
                         <p className="muted code-label">{language.code.toUpperCase()}</p>
@@ -605,12 +942,28 @@ function ProjectPage({ onNotify }) {
                     {language.isSource && <span className="pill">Source</span>}
                   </div>
 
-                  <p className="muted">{progressLabel(language.progress)}</p>
-                  <div className="progress-track">
+                  <div className="progress-section">
+                    <div className="progress-copy">
+                      <span className="progress-label">Translation progress</span>
+                      <span className="muted progress-stats">
+                        Translated: {language.progress.completed} · Total: {language.progress.total}
+                      </span>
+                    </div>
                     <div
-                      className="progress-bar"
-                      style={{ width: `${language.progress.percent}%` }}
-                    />
+                      className="progress-track"
+                      role="progressbar"
+                      aria-valuemin="0"
+                      aria-valuemax="100"
+                      aria-valuenow={language.progress.percent}
+                      aria-label="Translation progress"
+                    >
+                      <div
+                        className="progress-bar"
+                        style={{ width: `${language.progress.percent}%` }}
+                      >
+                        <span className="progress-value">{language.progress.percent}%</span>
+                      </div>
+                    </div>
                   </div>
 
                   <div className="card-actions">
@@ -623,15 +976,14 @@ function ProjectPage({ onNotify }) {
                       </span>
                       Edit
                     </Link>
-                    <a
-                      className="secondary-button"
-                      href={`/api/projects/${project.id}/download/${language.code}`}
+                    <button
+                      className="secondary-button action-menu-button"
+                      type="button"
+                      aria-label={`Open actions for ${display.label}`}
+                      onClick={() => setLanguageActionMenu(language)}
                     >
-                      <span className="button-icon" aria-hidden="true">
-                        ⭳
-                      </span>
-                      Download
-                    </a>
+                      ⋯
+                    </button>
                   </div>
                 </article>
               );
@@ -641,15 +993,19 @@ function ProjectPage({ onNotify }) {
       </div>
 
       {isDialogOpen && (
-        <div className="dialog-backdrop" onClick={() => setIsDialogOpen(false)}>
+        <div className="dialog-backdrop">
           <div className="dialog panel dialog-compact" onClick={(event) => event.stopPropagation()}>
             <div className="dialog-header">
               <div>
-                <p className="eyebrow">Add language</p>
-                <h2>Create language</h2>
+                <h2>Add language</h2>
               </div>
-              <button className="ghost-button" type="button" onClick={() => setIsDialogOpen(false)}>
-                Close
+              <button
+                className="ghost-button dialog-close"
+                type="button"
+                aria-label="Close dialog"
+                onClick={closeCreateLanguageDialog}
+              >
+                ×
               </button>
             </div>
 
@@ -659,25 +1015,293 @@ function ProjectPage({ onNotify }) {
               </div>
             ) : (
               <form className="stack-form" onSubmit={handleCreateLanguage}>
+                <FlagSelect
+                  value={selectedCode}
+                  options={availableLanguages}
+                  onChange={setSelectedCode}
+                />
+
                 <label>
-                  <span>Language</span>
-                  <select
-                    value={selectedCode}
-                    onChange={(event) => setSelectedCode(event.target.value)}
+                  <span>Existing translation file (optional)</span>
+                  <div
+                    className={`dropzone dropzone-compact ${isLanguageFileHovering ? "hover" : ""}`}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      setIsLanguageFileHovering(true);
+                    }}
+                    onDragLeave={() => setIsLanguageFileHovering(false)}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      setIsLanguageFileHovering(false);
+                      setLanguageFile(event.dataTransfer.files?.[0] || null);
+                    }}
                   >
-                    {availableLanguages.map((language) => (
-                      <option key={language.code} value={language.code}>
-                        {language.flag} {language.label} ({language.code.toUpperCase()})
-                      </option>
-                    ))}
-                  </select>
+                    <input
+                      id="language-upload-file"
+                      type="file"
+                      accept=".json,application/json"
+                      onChange={(event) => setLanguageFile(event.target.files?.[0] || null)}
+                    />
+                    <label htmlFor="language-upload-file" className="dropzone-content">
+                      <strong>{languageFile ? languageFile.name : "Drop JSON file here"}</strong>
+                      <span>
+                        {languageFile
+                          ? "This file will be used to initialize the new language."
+                          : "Optional: upload an existing translation or create an empty language."}
+                      </span>
+                    </label>
+                  </div>
                 </label>
 
                 <button className="primary-button" disabled={busy} type="submit">
-                  {busy ? "Creating..." : "Create"}
+                  {busy ? "Adding..." : languageFile ? "Add from file" : "Add"}
                 </button>
               </form>
             )}
+          </div>
+        </div>
+      )}
+
+      {isEditDialogOpen && (
+        <div className="dialog-backdrop">
+          <div className="dialog panel dialog-compact" onClick={(event) => event.stopPropagation()}>
+            <div className="dialog-header">
+              <div>
+                <h2>Edit project</h2>
+              </div>
+              <button
+                className="ghost-button dialog-close"
+                type="button"
+                aria-label="Close dialog"
+                onClick={closeEditProjectDialog}
+              >
+                ×
+              </button>
+            </div>
+
+            <form className="stack-form" onSubmit={handleUpdateProject}>
+              <label>
+                <span>Name</span>
+                <input
+                  required
+                  value={projectSettings.name}
+                  onChange={(event) =>
+                    setProjectSettings((current) => ({ ...current, name: event.target.value }))
+                  }
+                />
+              </label>
+
+              <label>
+                <span>Description</span>
+                <textarea
+                  rows="4"
+                  value={projectSettings.description}
+                  onChange={(event) =>
+                    setProjectSettings((current) => ({ ...current, description: event.target.value }))
+                  }
+                />
+              </label>
+
+              <label>
+                <span>Version</span>
+                <input
+                  value={projectSettings.version}
+                  onChange={(event) =>
+                    setProjectSettings((current) => ({ ...current, version: event.target.value }))
+                  }
+                />
+              </label>
+
+              <FlagSelect
+                label="Source language"
+                value={projectSettings.sourceLanguage}
+                options={project.languages.map((language) => ({
+                  code: language.code,
+                  label: language.label,
+                  countryCode: languageDisplay(language.code, language.label).countryCode,
+                }))}
+                onChange={(nextCode) =>
+                  setProjectSettings((current) => ({ ...current, sourceLanguage: nextCode }))
+                }
+              />
+
+              <label>
+                <span>Source language file (optional)</span>
+                <div
+                  className={`dropzone dropzone-compact ${isSourceFileHovering ? "hover" : ""}`}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    setIsSourceFileHovering(true);
+                  }}
+                  onDragLeave={() => setIsSourceFileHovering(false)}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    setIsSourceFileHovering(false);
+                    setSourceFile(event.dataTransfer.files?.[0] || null);
+                  }}
+                >
+                  <input
+                    id="project-source-update-file"
+                    type="file"
+                    accept=".json,application/json"
+                    onChange={(event) => setSourceFile(event.target.files?.[0] || null)}
+                  />
+                  <label htmlFor="project-source-update-file" className="dropzone-content">
+                    <strong>{sourceFile ? sourceFile.name : "Drop JSON file here"}</strong>
+                    <span>
+                      {sourceFile
+                        ? "This file will replace the selected source language file."
+                        : "Optional: upload a new source language file while saving project details."}
+                    </span>
+                  </label>
+                </div>
+              </label>
+
+              <button className="primary-button" disabled={busy} type="submit">
+                {busy ? "Saving..." : "Save changes"}
+              </button>
+              <button className="danger-button" disabled={busy} type="button" onClick={() => setDeleteProjectOpen(true)}>
+                Delete project
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {deleteProjectOpen && (
+        <div className="dialog-backdrop">
+          <div className="dialog panel dialog-compact" onClick={(event) => event.stopPropagation()}>
+            <div className="dialog-header">
+              <div>
+                <h2>Delete project</h2>
+              </div>
+              <button
+                className="ghost-button dialog-close"
+                type="button"
+                aria-label="Close dialog"
+                onClick={closeDeleteProjectDialog}
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="dialog-copy">
+              <p className="muted">
+                Delete <strong>{project.name}</strong> and all of its language files? This cannot be undone.
+              </p>
+            </div>
+
+            <div className="dialog-actions">
+              <button className="secondary-button" type="button" onClick={closeDeleteProjectDialog}>
+                Cancel
+              </button>
+              <button className="danger-button" type="button" disabled={busy} onClick={handleDeleteProject}>
+                {busy ? "Deleting..." : "Delete project"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {languageToDelete && (
+        <div className="dialog-backdrop">
+          <div className="dialog panel dialog-compact" onClick={(event) => event.stopPropagation()}>
+            <div className="dialog-header">
+              <div>
+                <h2>Delete language</h2>
+              </div>
+              <button
+                className="ghost-button dialog-close"
+                type="button"
+                aria-label="Close dialog"
+                onClick={closeDeleteLanguageDialog}
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="dialog-copy">
+              <p className="muted">
+                Delete <strong>{languageDisplay(languageToDelete.code, languageToDelete.label).label}</strong> from
+                this project? This cannot be undone.
+              </p>
+            </div>
+
+            <div className="dialog-actions">
+              <button className="secondary-button" type="button" onClick={closeDeleteLanguageDialog}>
+                Cancel
+              </button>
+              <button className="danger-button" type="button" disabled={busy} onClick={handleDeleteLanguage}>
+                {busy ? "Deleting..." : "Delete language"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {languageActionMenu && (
+        <div className="dialog-backdrop">
+          <div className="dialog panel dialog-compact" onClick={(event) => event.stopPropagation()}>
+            <div className="dialog-header">
+              <div>
+                <h2>{languageDisplay(languageActionMenu.code, languageActionMenu.label).label}</h2>
+              </div>
+              <button
+                className="ghost-button dialog-close"
+                type="button"
+                aria-label="Close dialog"
+                onClick={closeLanguageActionMenu}
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="dialog-actions dialog-actions-stacked">
+              <a
+                className="secondary-button"
+                href={`/api/projects/${project.id}/download/${languageActionMenu.code}`}
+                onClick={closeLanguageActionMenu}
+              >
+                <span className="button-icon" aria-hidden="true">
+                  ⭳
+                </span>
+                Download
+              </a>
+              <label className="secondary-button upload-button">
+                <input
+                  type="file"
+                  accept=".json,application/json"
+                  disabled={busy || uploadingLanguageCode === languageActionMenu.code}
+                  onChange={(event) => {
+                    void handleReplaceLanguageFile(
+                      languageActionMenu.code,
+                      event.target.files?.[0] || null,
+                    );
+                    event.target.value = "";
+                  }}
+                />
+                <span className="button-icon" aria-hidden="true">
+                  ⭱
+                </span>
+                {uploadingLanguageCode === languageActionMenu.code ? "Uploading..." : "Upload"}
+              </label>
+              {!languageActionMenu.isSource && (
+                <button
+                  className="danger-button"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    setLanguageToDelete(languageActionMenu);
+                    closeLanguageActionMenu();
+                  }}
+                >
+                  <span className="button-icon" aria-hidden="true">
+                    ×
+                  </span>
+                  Delete
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -685,14 +1309,17 @@ function ProjectPage({ onNotify }) {
   );
 }
 
-function EditorPage({ onNotify }) {
+function EditorPage() {
+  const { showToast } = useOutletContext();
   const { projectId, languageCode } = useParams();
   const [project, setProject] = useState(null);
   const [editorData, setEditorData] = useState(null);
   const [editorDraft, setEditorDraft] = useState({});
+  const [searchQuery, setSearchQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const deferredSearchQuery = useDeferredValue(searchQuery);
 
   useEffect(() => {
     let active = true;
@@ -737,6 +1364,52 @@ function EditorPage({ onNotify }) {
     [project, languageCode],
   );
 
+  const hasUnsavedChanges = useMemo(() => {
+    if (!editorData) {
+      return false;
+    }
+
+    return editorData.rows.some((row) => (editorDraft[row.key] ?? "") !== (row.translation ?? ""));
+  }, [editorData, editorDraft]);
+
+  const blocker = useBlocker(hasUnsavedChanges);
+
+  useBeforeUnload(
+    useMemo(
+      () => (event) => {
+        if (!hasUnsavedChanges) {
+          return;
+        }
+
+        event.preventDefault();
+        event.returnValue = "";
+      },
+      [hasUnsavedChanges],
+    ),
+  );
+
+  const filteredRows = useMemo(() => {
+    if (!editorData) {
+      return [];
+    }
+
+    const normalizedQuery = deferredSearchQuery.trim().toLowerCase();
+    if (!normalizedQuery) {
+      return editorData.rows;
+    }
+
+    return editorData.rows.filter((row) => {
+      const sourceValue = String(row.source ?? "").toLowerCase();
+      const translatedValue = String(editorDraft[row.key] ?? row.translation ?? "").toLowerCase();
+
+      return (
+        row.key.toLowerCase().includes(normalizedQuery) ||
+        sourceValue.includes(normalizedQuery) ||
+        translatedValue.includes(normalizedQuery)
+      );
+    });
+  }, [deferredSearchQuery, editorData, editorDraft]);
+
   async function handleSaveTranslations() {
     if (!editorData) {
       return;
@@ -751,10 +1424,21 @@ function EditorPage({ onNotify }) {
         body: JSON.stringify({ entries: editorDraft }),
       });
 
-      setEditorData((current) => (current ? { ...current, progress: result.progress } : current));
-      onNotify("success", `Saved. ${progressLabel(result.progress)}`);
+      setEditorData((current) =>
+        current
+          ? {
+              ...current,
+              progress: result.progress,
+              rows: current.rows.map((row) => ({
+                ...row,
+                translation: editorDraft[row.key] ?? "",
+              })),
+            }
+          : current,
+      );
+      showToast("success", `Saved. ${progressLabel(result.progress)}`);
     } catch (requestError) {
-      onNotify("error", requestError.message);
+      showToast("error", requestError.message);
     } finally {
       setBusy(false);
     }
@@ -777,58 +1461,133 @@ function EditorPage({ onNotify }) {
   }
 
   return (
-    <section className="panel editor-panel">
-      <div className="editor-header">
-        <div>
-          <p className="eyebrow">Translation editor</p>
-          <h2 className="editor-title">
-            <Link className="back-link" to={`/projects/${project.id}`}>
-              ‹
-            </Link>
-            <span>
-              {languageDisplay(editorLanguage.code, editorLanguage.label).flag} {editorLanguage.label}
+    <>
+      <section className="panel editor-panel">
+        <div className="editor-header">
+          <div>
+            <p className="eyebrow">Translation editor</p>
+            <h2 className="editor-title">
+              <Link className="back-link" to={`/projects/${project.id}`}>
+                ‹
+              </Link>
+              <span className="editor-title-text">
+                <FlagIcon
+                  countryCode={languageDisplay(editorLanguage.code, editorLanguage.label).countryCode}
+                  label={editorLanguage.label}
+                  className="editor-flag"
+                />{" "}
+                {editorLanguage.label}
+              </span>
+            </h2>
+            <p className="muted">
+              Progress: {editorData.progress.percent}% · Translated strings: {editorData.progress.completed}/
+              {editorData.progress.total}
+            </p>
+          </div>
+
+          <button className="primary-button" disabled={busy} type="button" onClick={handleSaveTranslations}>
+            <span className="button-icon" aria-hidden="true">
+              ✎
             </span>
-          </h2>
-          <p className="muted">{progressLabel(editorData.progress)}</p>
+            {busy ? "Saving..." : "Save progress"}
+          </button>
         </div>
 
-        <button className="primary-button" disabled={busy} type="button" onClick={handleSaveTranslations}>
-          <span className="button-icon" aria-hidden="true">
-            ✎
-          </span>
-          {busy ? "Saving..." : "Save progress"}
-        </button>
-      </div>
+        <div className="editor-list">
+          <label className="editor-search">
+            <span>Search translations</span>
+            <input
+              type="search"
+              placeholder="Search by key, source text, or translation..."
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+            />
+          </label>
 
-      <div className="editor-list">
-        {editorData.rows.map((row) => (
-          <div className="editor-row" key={row.key}>
-            <label className="editor-field">
-              <span className="field-key">{row.key}</span>
-              <input readOnly value={String(row.source ?? "")} />
-            </label>
+          {filteredRows.length === 0 ? (
+            <div className="empty-state editor-empty-state">
+              <h3>No matching translations</h3>
+              <p className="muted">Try a different search term for the key, source text, or translation.</p>
+            </div>
+          ) : (
+            filteredRows.map((row) => (
+              <div className="editor-row" key={row.key}>
+                <label className="editor-field">
+                  <span className="field-key">{row.key}</span>
+                  <input readOnly value={String(row.source ?? "")} />
+                </label>
 
-            <label className="editor-field">
-              <span className="field-key">Translation</span>
-              <input
-                value={editorDraft[row.key] ?? ""}
-                onChange={(event) =>
-                  setEditorDraft((current) => ({
-                    ...current,
-                    [row.key]: event.target.value,
-                  }))
-                }
-              />
-            </label>
+                <label className="editor-field editor-field-editable">
+                  <span className="field-key field-key-placeholder" aria-hidden="true">
+                    Translation
+                  </span>
+                  <input
+                    value={editorDraft[row.key] ?? ""}
+                    onChange={(event) =>
+                      setEditorDraft((current) => ({
+                        ...current,
+                        [row.key]: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+              </div>
+            ))
+          )}
+        </div>
+      </section>
+
+      {blocker.state === "blocked" && (
+        <div className="dialog-backdrop">
+          <div className="dialog panel dialog-compact" onClick={(event) => event.stopPropagation()}>
+            <div className="dialog-header">
+              <div>
+                <h2>Unsaved changes</h2>
+              </div>
+              <button
+                className="ghost-button dialog-close"
+                type="button"
+                aria-label="Close dialog"
+                onClick={() => blocker.reset()}
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="dialog-copy">
+              <p className="muted">
+                You have unsaved translations. If you leave this page now, your recent changes will be lost.
+              </p>
+            </div>
+
+            <div className="dialog-actions">
+              <button className="secondary-button" type="button" onClick={() => blocker.reset()}>
+                Stay here
+              </button>
+              <button className="primary-button" type="button" onClick={() => blocker.proceed()}>
+                Leave page
+              </button>
+            </div>
           </div>
-        ))}
-      </div>
-    </section>
+        </div>
+      )}
+    </>
   );
 }
 
 function InlineNotice({ kind, message }) {
   return <div className={`inline-notice ${kind}`}>{message}</div>;
 }
+
+const appRouter = createBrowserRouter(
+  createRoutesFromElements(
+    <Route element={<AppShell />}>
+      <Route path="/" element={<DashboardPage />} />
+      <Route path="/projects/:projectId" element={<ProjectPage />} />
+      <Route path="/projects/:projectId/languages/:languageCode/edit" element={<EditorPage />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Route>,
+  ),
+);
 
 export default App;
