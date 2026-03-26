@@ -4,7 +4,8 @@
   "description": "Modern i18n JSON translation workspace",
   "main": "server/server.js",
   "scripts": {
-    "dev": "concurrently \"node server/server.js\" \"vite\"",
+    "dev": "concurrently \"node scripts/init-db.js && node server/server.js\" \"vite\"",
+    "db:init": "node scripts/init-db.js",
     "build": "vite build",
     "start": "node server/server.js"
   },
@@ -14,9 +15,11 @@
   "type": "commonjs",
   "dependencies": {
     "archiver": "^7.0.1",
+    "cookie-parser": "^1.4.7",
     "express": "^5.2.1",
     "flag-icons": "^7.5.0",
     "multer": "^2.1.1",
+    "pg": "^8.20.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-router-dom": "^7.13.2"
