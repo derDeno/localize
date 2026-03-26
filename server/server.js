@@ -209,13 +209,22 @@ async function copyLibraryFileToProject(projectId, libraryFileName, languageCode
 }
 
 async function readProject(projectId) {
-  const config = await readJsonFile(projectConfigPath(projectId));
-  return config;
+  const configPath = projectConfigPath(projectId);
+  const config = await readJsonFile(configPath);
+  const normalized = normalizeProjectConfig(projectId, config);
+
+  if (JSON.stringify(config) !== JSON.stringify(normalized)) {
+    await writeJsonFile(configPath, normalized);
+  }
+
+  return normalized;
 }
 
 async function writeProject(project) {
-  project.updatedAt = new Date().toISOString();
-  await writeJsonFile(projectConfigPath(project.id), project);
+  const normalized = normalizeProjectConfig(project.id, project);
+  normalized.updatedAt = new Date().toISOString();
+  await writeJsonFile(projectConfigPath(normalized.id), normalized);
+  Object.assign(project, normalized);
 }
 
 async function getProjectSummary(project) {
@@ -236,6 +245,8 @@ async function getProjectSummary(project) {
   return {
     id: project.id,
     name: project.name,
+    description: project.description || "",
+    version: project.version || "",
     sourceLanguage: project.sourceLanguage,
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,
@@ -270,6 +281,34 @@ function buildLanguageInfo(code, label, origin, libraryFile = null) {
     label: label || code.toUpperCase(),
     origin,
     libraryFile,
+  };
+}
+
+function normalizeLanguageInfo(language) {
+  const code = String(language?.code || "").trim().toLowerCase();
+  return {
+    code,
+    label: String(language?.label || code.toUpperCase()).trim(),
+    origin: String(language?.origin || "upload").trim(),
+    libraryFile: language?.libraryFile ? String(language.libraryFile).trim() : null,
+  };
+}
+
+function normalizeProjectConfig(projectId, config) {
+  const languages = Array.isArray(config?.languages) ? config.languages.map(normalizeLanguageInfo) : [];
+  const sourceLanguage = String(config?.sourceLanguage || languages[0]?.code || "")
+    .trim()
+    .toLowerCase();
+
+  return {
+    id: String(config?.id || projectId).trim(),
+    name: String(config?.name || projectId).trim(),
+    description: String(config?.description || "").trim(),
+    version: String(config?.version || "").trim(),
+    sourceLanguage,
+    createdAt: config?.createdAt || new Date().toISOString(),
+    updatedAt: config?.updatedAt || new Date().toISOString(),
+    languages,
   };
 }
 
@@ -311,7 +350,7 @@ app.get("/api/projects", async (_req, res, next) => {
 
 app.post("/api/projects", upload.single("sourceFile"), async (req, res, next) => {
   try {
-    const { name, sourceLanguage, sourceLabel, sourceMode, sourceLibraryFile } = req.body;
+    const { name, description, version, sourceLanguage, sourceLabel, sourceMode, sourceLibraryFile } = req.body;
 
     if (!name || !sourceLanguage) {
       return res.status(400).json({ message: "Project name and source language are required." });
@@ -321,6 +360,8 @@ app.post("/api/projects", upload.single("sourceFile"), async (req, res, next) =>
     const project = {
       id: projectId,
       name,
+      description: String(description || "").trim(),
+      version: String(version || "").trim(),
       sourceLanguage,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -367,9 +408,27 @@ app.get("/api/projects/:projectId", async (req, res, next) => {
 app.patch("/api/projects/:projectId", async (req, res, next) => {
   try {
     const project = await readProject(req.params.projectId);
-    if (req.body.name) {
-      project.name = req.body.name;
+    const { name, description, version, sourceLanguage } = req.body;
+
+    if (typeof name === "string" && name.trim()) {
+      project.name = name.trim();
     }
+
+    if (typeof description === "string") {
+      project.description = description.trim();
+    }
+
+    if (typeof version === "string") {
+      project.version = version.trim();
+    }
+
+    if (typeof sourceLanguage === "string" && sourceLanguage.trim()) {
+      if (!project.languages.some((language) => language.code === sourceLanguage)) {
+        return res.status(404).json({ message: "The selected language does not exist in this project." });
+      }
+      project.sourceLanguage = sourceLanguage.trim();
+    }
+
     await writeProject(project);
     res.json(await getProjectSummary(project));
   } catch (error) {
@@ -427,6 +486,28 @@ app.post("/api/projects/:projectId/languages", upload.single("file"), async (req
     project.languages.push(buildLanguageInfo(code, label, mode || "empty", linkedLibraryFile));
     await writeProject(project);
     res.status(201).json(await getProjectSummary(project));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/projects/:projectId/languages/:languageCode", async (req, res, next) => {
+  try {
+    const project = await readProject(req.params.projectId);
+    const { languageCode } = req.params;
+
+    if (!project.languages.some((language) => language.code === languageCode)) {
+      return res.status(404).json({ message: "The selected language does not exist in this project." });
+    }
+
+    if (project.sourceLanguage === languageCode) {
+      return res.status(400).json({ message: "The source language cannot be deleted." });
+    }
+
+    project.languages = project.languages.filter((language) => language.code !== languageCode);
+    await deletePath(languagePath(project.id, languageCode));
+    await writeProject(project);
+    res.json(await getProjectSummary(project));
   } catch (error) {
     next(error);
   }
@@ -493,6 +574,36 @@ app.put("/api/projects/:projectId/languages/:languageCode", async (req, res, nex
     next(error);
   }
 });
+
+app.post(
+  "/api/projects/:projectId/languages/:languageCode/upload",
+  upload.single("file"),
+  async (req, res, next) => {
+    try {
+      const project = await readProject(req.params.projectId);
+      const language = project.languages.find((item) => item.code === req.params.languageCode);
+
+      if (!language) {
+        return res.status(404).json({ message: "The selected language does not exist in this project." });
+      }
+
+      if (!req.file) {
+        return res.status(400).json({ message: "Please upload a JSON file." });
+      }
+
+      const saved = await saveLibraryFile(req.file.buffer, req.body.fileName || req.file.originalname);
+      await writeJsonFile(languagePath(project.id, req.params.languageCode), saved.json);
+
+      language.origin = "upload";
+      language.libraryFile = saved.fileName;
+      await writeProject(project);
+
+      res.json(await getProjectSummary(project));
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 app.get("/api/projects/:projectId/download/:languageCode", async (req, res, next) => {
   try {
