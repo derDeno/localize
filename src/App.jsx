@@ -1,4 +1,4 @@
-import { createContext, useContext, useDeferredValue, useEffect, useMemo, useState } from "react";
+import { createContext, useContext, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
   Link,
   NavLink,
@@ -51,7 +51,6 @@ const initialProjectForm = {
   version: "1.0.0",
   sourceLanguage: "en",
   sourceLabel: "English",
-  sourceMode: "upload",
   sourceLibraryFile: "",
 };
 
@@ -120,13 +119,62 @@ function MoonIcon() {
   );
 }
 
-function Flag({ code, label }) {
+function Flag({ code, label, className = "" }) {
   const display = languageDisplay(code, label);
   if (!display.countryCode) {
-    return <span className="flag-fallback">●</span>;
+    return <span className={`flag-fallback ${className}`.trim()}>●</span>;
   }
 
-  return <span className={`fi fi-${display.countryCode} flag-icon`} aria-hidden="true" />;
+  return <span className={`fi fi-${display.countryCode} flag-icon ${className}`.trim()} aria-hidden="true" />;
+}
+
+function FlagSelect({ label, value, options, onChange }) {
+  const detailsRef = useRef(null);
+  const selectedOption = options.find((option) => option.code === value) || options[0];
+
+  return (
+    <label className="flag-select-field">
+      {label ? <span>{label}</span> : null}
+      <details className="flag-select" ref={detailsRef}>
+        <summary className="flag-select-trigger">
+          <span className="flag-select-value">
+            {selectedOption ? (
+              <>
+                <Flag code={selectedOption.code} label={selectedOption.label} />
+                <span>
+                  {selectedOption.label} ({selectedOption.code.toUpperCase()})
+                </span>
+              </>
+            ) : (
+              <span>Select a language</span>
+            )}
+          </span>
+          <span className="flag-select-chevron" aria-hidden="true">
+            ▾
+          </span>
+        </summary>
+
+        <div className="flag-select-menu">
+          {options.map((option) => (
+            <button
+              key={option.code}
+              className={`flag-select-option${option.code === value ? " active" : ""}`}
+              type="button"
+              onClick={() => {
+                onChange(option.code);
+                detailsRef.current?.removeAttribute("open");
+              }}
+            >
+              <Flag code={option.code} label={option.label} />
+              <span>
+                {option.label} ({option.code.toUpperCase()})
+              </span>
+            </button>
+          ))}
+        </div>
+      </details>
+    </label>
+  );
 }
 
 function AppProvider({ children }) {
@@ -235,7 +283,7 @@ function RequireRole({ role }) {
 
 function AppShell() {
   const navigate = useNavigate();
-  const { user, settings, refreshBootstrap, setBootstrap } = useApp();
+  const { user, setBootstrap } = useApp();
   const [themePreference, setThemePreference] = useState(() => localStorage.getItem("localize-theme"));
   const [systemTheme, setSystemTheme] = useState(getSystemTheme);
   const [toast, setToast] = useState(null);
@@ -248,6 +296,14 @@ function AppShell() {
   const [libraryFiles, setLibraryFiles] = useState([]);
   const [isCreatingProject, setIsCreatingProject] = useState(false);
   const theme = themePreference || systemTheme || "light";
+  const projectLanguageOptions = useMemo(
+    () =>
+      Object.entries(languageMeta).map(([code, meta]) => ({
+        code,
+        label: meta.name,
+      })),
+    [],
+  );
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -327,11 +383,19 @@ function AppShell() {
   }
 
   function handleProjectFileSelection(file) {
-    if (!file) {
-      return;
-    }
-
     setProjectFile(file);
+    if (file) {
+      setProjectForm((current) => ({ ...current, sourceLibraryFile: "" }));
+    }
+  }
+
+  function handleProjectLibrarySelection(fileName) {
+    setProjectFile(null);
+    setProjectForm((current) => ({
+      ...current,
+      sourceLibraryFile: fileName,
+      sourceLabel: languageDisplay(current.sourceLanguage).label,
+    }));
   }
 
   async function handleLogout() {
@@ -345,9 +409,10 @@ function AppShell() {
 
   async function handleCreateProject(event) {
     event.preventDefault();
+    const sourceMode = projectForm.sourceLibraryFile && !projectFile ? "library" : "upload";
 
-    if (projectForm.sourceMode === "upload" && !projectFile) {
-      showToast("error", "Please select a source file.");
+    if (sourceMode === "upload" && !projectFile) {
+      showToast("error", "Please select a source file or a library file.");
       return;
     }
 
@@ -363,9 +428,9 @@ function AppShell() {
         "sourceLabel",
         projectForm.sourceLabel.trim() || languageDisplay(projectForm.sourceLanguage).label,
       );
-      formData.set("sourceMode", projectForm.sourceMode);
+      formData.set("sourceMode", sourceMode);
 
-      if (projectForm.sourceMode === "library") {
+      if (sourceMode === "library") {
         formData.set("sourceLibraryFile", projectForm.sourceLibraryFile);
       } else if (projectFile) {
         formData.set("sourceFile", projectFile);
@@ -397,7 +462,6 @@ function AppShell() {
         <div className="brand">
           <img src="/icon.svg" alt="localize icon" className="brand-icon" />
           <div>
-            <p className="eyebrow">i18n workspace</p>
             <h1>localize</h1>
           </div>
         </div>
@@ -414,15 +478,6 @@ function AppShell() {
         </nav>
 
         <div className="topbar-actions">
-          <div className="account-chip">
-            <strong>
-              {user.firstName} {user.lastName}
-            </strong>
-            <span className="muted">
-              {user.role} · {user.email}
-            </span>
-          </div>
-
           <label className="theme-switch">
             <button
               type="button"
@@ -445,23 +500,11 @@ function AppShell() {
             </button>
           </label>
 
-          <button className="ghost-button" type="button" onClick={refreshBootstrap}>
-            Refresh
-          </button>
-          <button className="secondary-button" type="button" onClick={handleLogout}>
-            Sign out
+          <button className="icon-button danger-icon-button" type="button" aria-label="Sign out" onClick={handleLogout}>
+            ⏻
           </button>
         </div>
       </header>
-
-      {!settings ? null : (
-        <section className="status-banner">
-          <span className="pill">Registration: {settings.allowRegistration ? "on" : "off"}</span>
-          <span className="pill">Project delete: {settings.allowProjectDelete ? "on" : "off"}</span>
-          <span className="pill">Language delete: {settings.allowLanguageDelete ? "on" : "off"}</span>
-          <span className="pill">SSO: {settings.sso.enabled ? "configured" : "not configured"}</span>
-        </section>
-      )}
 
       {toast ? (
         <div className={`toast ${toast.kind}`} key={toast.id} role="status" aria-live="polite">
@@ -485,7 +528,7 @@ function AppShell() {
       </main>
 
       {isCreateDialogOpen ? (
-        <div className="dialog-backdrop" onClick={closeCreateDialog}>
+        <div className="dialog-backdrop">
           <div className="dialog panel" onClick={(event) => event.stopPropagation()}>
             <div className="dialog-header">
               <div>
@@ -534,64 +577,27 @@ function AppShell() {
                 />
               </label>
 
-              <div className="split-grid">
-                <label>
-                  <span>Source language code</span>
-                  <input
-                    required
-                    value={projectForm.sourceLanguage}
-                    onChange={(event) =>
-                      setProjectForm((current) => ({
-                        ...current,
-                        sourceLanguage: event.target.value,
-                      }))
-                    }
-                  />
-                </label>
+              <FlagSelect
+                label="Source language"
+                value={projectForm.sourceLanguage}
+                options={projectLanguageOptions}
+                onChange={(nextCode) =>
+                  setProjectForm((current) => ({
+                    ...current,
+                    sourceLanguage: nextCode,
+                    sourceLabel: languageDisplay(nextCode).label,
+                  }))
+                }
+              />
 
+              {libraryFiles.length ? (
                 <label>
-                  <span>Source label</span>
-                  <input
-                    required
-                    value={projectForm.sourceLabel}
-                    onChange={(event) =>
-                      setProjectForm((current) => ({ ...current, sourceLabel: event.target.value }))
-                    }
-                  />
-                </label>
-              </div>
-
-              <label>
-                <span>Source mode</span>
-                <select
-                  value={projectForm.sourceMode}
-                  onChange={(event) =>
-                    setProjectForm((current) => ({
-                      ...current,
-                      sourceMode: event.target.value,
-                      sourceLibraryFile: "",
-                    }))
-                  }
-                >
-                  <option value="upload">Upload</option>
-                  <option value="library">Library</option>
-                </select>
-              </label>
-
-              {projectForm.sourceMode === "library" ? (
-                <label>
-                  <span>Library file</span>
+                  <span>Library file (optional)</span>
                   <select
                     value={projectForm.sourceLibraryFile}
-                    onChange={(event) =>
-                      setProjectForm((current) => ({
-                        ...current,
-                        sourceLibraryFile: event.target.value,
-                      }))
-                    }
-                    required
+                    onChange={(event) => handleProjectLibrarySelection(event.target.value)}
                   >
-                    <option value="">Select a JSON file</option>
+                    <option value="">Use uploaded file</option>
                     {libraryFiles.map((file) => (
                       <option key={file.fileName} value={file.fileName}>
                         {file.label}
@@ -599,35 +605,39 @@ function AppShell() {
                     ))}
                   </select>
                 </label>
-              ) : (
-                <label>
-                  <span>Source file</span>
-                  <div
-                    className={`dropzone ${isProjectFileHovering ? "hover" : ""}`}
-                    onDragOver={(event) => {
-                      event.preventDefault();
-                      setIsProjectFileHovering(true);
-                    }}
-                    onDragLeave={() => setIsProjectFileHovering(false)}
-                    onDrop={(event) => {
-                      event.preventDefault();
-                      setIsProjectFileHovering(false);
-                      handleProjectFileSelection(event.dataTransfer.files?.[0] || null);
-                    }}
-                  >
-                    <input
-                      id="project-source-file"
-                      type="file"
-                      accept=".json,application/json"
-                      onChange={(event) => handleProjectFileSelection(event.target.files?.[0] || null)}
-                    />
-                    <label htmlFor="project-source-file" className="dropzone-content">
-                      <strong>{projectFile ? projectFile.name : "Drop JSON file here"}</strong>
-                      <span>{projectFile ? "Click to replace it." : "or click to browse your files."}</span>
-                    </label>
-                  </div>
-                </label>
-              )}
+              ) : null}
+
+              <label>
+                <span>Source file</span>
+                <div
+                  className={`dropzone ${isProjectFileHovering ? "hover" : ""}`}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    setIsProjectFileHovering(true);
+                  }}
+                  onDragLeave={() => setIsProjectFileHovering(false)}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    setIsProjectFileHovering(false);
+                    handleProjectFileSelection(event.dataTransfer.files?.[0] || null);
+                  }}
+                >
+                  <input
+                    id="project-source-file"
+                    type="file"
+                    accept=".json,application/json"
+                    onChange={(event) => handleProjectFileSelection(event.target.files?.[0] || null)}
+                  />
+                  <label htmlFor="project-source-file" className="dropzone-content">
+                    <strong>{projectFile ? projectFile.name : "Drop JSON file here"}</strong>
+                    <span>
+                      {projectFile
+                        ? "This upload will be used for the project source."
+                        : "If you leave this empty, the selected library file will be used."}
+                    </span>
+                  </label>
+                </div>
+              </label>
 
               <button className="primary-button" disabled={isCreatingProject} type="submit">
                 {isCreatingProject ? "Creating..." : "Create"}
@@ -857,7 +867,6 @@ function DashboardPage() {
     <div className="page-stack">
       <section className="page-hero panel">
         <div>
-          <p className="eyebrow">Dashboard</p>
           <h2>Projects</h2>
           <p className="muted">Open a project card to manage languages and translations.</p>
         </div>
@@ -878,7 +887,7 @@ function DashboardPage() {
           <h3>Loading projects...</h3>
         </section>
       ) : projects.length === 0 ? (
-        <section className="panel empty-state">
+        <section className="empty-state page-empty-state">
           <h3>No projects yet</h3>
           <p className="muted">Create your first project to start translating JSON files.</p>
         </section>
@@ -916,513 +925,905 @@ function DashboardPage() {
 }
 
 function ProjectPage() {
+  const { showToast } = useOutletContext();
   const navigate = useNavigate();
   const { projectId } = useParams();
   const { user, settings } = useApp();
   const [project, setProject] = useState(null);
-  const [versions, setVersions] = useState([]);
-  const [libraryFiles, setLibraryFiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [editForm, setEditForm] = useState({
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [selectedCode, setSelectedCode] = useState("");
+  const [projectSettings, setProjectSettings] = useState({
     name: "",
     description: "",
     version: "",
     sourceLanguage: "",
   });
-  const [languageForm, setLanguageForm] = useState({
-    code: "",
-    label: "",
-    mode: "empty",
-    libraryFile: "",
-    file: null,
-  });
+  const [languageFile, setLanguageFile] = useState(null);
+  const [isLanguageFileHovering, setIsLanguageFileHovering] = useState(false);
+  const [sourceFile, setSourceFile] = useState(null);
+  const [isSourceFileHovering, setIsSourceFileHovering] = useState(false);
+  const [uploadingLanguageCode, setUploadingLanguageCode] = useState("");
+  const [deleteProjectOpen, setDeleteProjectOpen] = useState(false);
+  const [languageToDelete, setLanguageToDelete] = useState(null);
+  const [languageActionMenu, setLanguageActionMenu] = useState(null);
+  const [busy, setBusy] = useState(false);
 
-  async function loadData() {
-    setLoading(true);
-    setError("");
-    try {
-      const [projectPayload, versionPayload, libraryPayload] = await Promise.all([
-        apiFetch(`/api/projects/${projectId}`),
-        apiFetch(`/api/projects/${projectId}/versions`),
-        apiFetch("/api/library"),
-      ]);
-      setProject(projectPayload);
-      setVersions(versionPayload);
-      setLibraryFiles(libraryPayload);
-      setEditForm({
-        name: projectPayload.name,
-        description: projectPayload.description || "",
-        version: projectPayload.version || "",
-        sourceLanguage: projectPayload.sourceLanguage,
-      });
-    } catch (loadError) {
-      setError(loadError.message);
-    } finally {
-      setLoading(false);
+  const availableLanguages = useMemo(() => {
+    if (!project) {
+      return [];
     }
-  }
+
+    return Object.entries(languageMeta)
+      .filter(([code]) => !project.languages.some((language) => language.code === code))
+      .map(([code, meta]) => ({
+        code,
+        label: meta.name,
+      }));
+  }, [project]);
 
   useEffect(() => {
-    loadData();
+    let active = true;
+
+    async function loadProject() {
+      setLoading(true);
+      setError("");
+
+      try {
+        const details = await apiFetch(`/api/projects/${projectId}`);
+        if (active) {
+          setProject(details);
+          setSelectedCode((current) => current || details.languages.find((language) => !language.isSource)?.code || "");
+          setProjectSettings({
+            name: details.name || "",
+            description: details.description || "",
+            version: details.version || "",
+            sourceLanguage: details.sourceLanguage || "",
+          });
+        }
+      } catch (requestError) {
+        if (active) {
+          setError(requestError.message);
+        }
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    }
+
+    void loadProject();
+
+    return () => {
+      active = false;
+    };
   }, [projectId]);
+
+  useEffect(() => {
+    if (!availableLanguages.length) {
+      setSelectedCode("");
+      return;
+    }
+
+    setSelectedCode((current) =>
+      availableLanguages.some((language) => language.code === current) ? current : availableLanguages[0].code,
+    );
+  }, [availableLanguages]);
+
+  function resetCreateLanguageDialog() {
+    setLanguageFile(null);
+    setIsLanguageFileHovering(false);
+  }
+
+  function openCreateLanguageDialog() {
+    resetCreateLanguageDialog();
+    setIsDialogOpen(true);
+  }
+
+  function closeCreateLanguageDialog() {
+    setIsDialogOpen(false);
+    resetCreateLanguageDialog();
+  }
+
+  function openEditProjectDialog() {
+    setSourceFile(null);
+    setIsSourceFileHovering(false);
+    setIsEditDialogOpen(true);
+  }
+
+  function closeEditProjectDialog() {
+    setIsEditDialogOpen(false);
+    setSourceFile(null);
+    setIsSourceFileHovering(false);
+  }
+
+  function closeDeleteProjectDialog() {
+    setDeleteProjectOpen(false);
+  }
+
+  function closeDeleteLanguageDialog() {
+    setLanguageToDelete(null);
+  }
+
+  function closeLanguageActionMenu() {
+    setLanguageActionMenu(null);
+  }
+
+  async function handleCreateLanguage(event) {
+    event.preventDefault();
+    if (!selectedCode) {
+      return;
+    }
+
+    setBusy(true);
+
+    try {
+      const formData = new FormData();
+      formData.set("code", selectedCode);
+      formData.set("label", languageDisplay(selectedCode).label);
+      formData.set("mode", languageFile ? "upload" : "empty");
+
+      if (languageFile) {
+        formData.set("file", languageFile);
+        formData.set("fileName", languageFile.name);
+      }
+
+      const updated = await apiFetch(`/api/projects/${projectId}/languages`, {
+        method: "POST",
+        body: formData,
+      });
+
+      setProject(updated);
+      closeCreateLanguageDialog();
+      showToast("success", languageFile ? "Language added from uploaded file." : "Language added.");
+    } catch (requestError) {
+      showToast("error", requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function handleUpdateProject(event) {
     event.preventDefault();
-    await apiFetch(`/api/projects/${projectId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(editForm),
-    });
-    await loadData();
-  }
+    setBusy(true);
 
-  async function handleAddLanguage(event) {
-    event.preventDefault();
-    const body = new FormData();
-    body.append("code", languageForm.code);
-    body.append("label", languageForm.label);
-    body.append("mode", languageForm.mode);
-    if (languageForm.mode === "library") {
-      body.append("libraryFile", languageForm.libraryFile);
-    }
-    if (languageForm.mode === "upload" && languageForm.file) {
-      body.append("file", languageForm.file);
-      body.append("fileName", languageForm.file.name);
-    }
-    await apiFetch(`/api/projects/${projectId}/languages`, {
-      method: "POST",
-      body,
-    });
-    setLanguageForm({
-      code: "",
-      label: "",
-      mode: "empty",
-      libraryFile: "",
-      file: null,
-    });
-    await loadData();
-  }
+    try {
+      let updated = await apiFetch(`/api/projects/${projectId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: projectSettings.name,
+          description: projectSettings.description,
+          version: projectSettings.version,
+          sourceLanguage: projectSettings.sourceLanguage,
+        }),
+      });
 
-  async function handleDeleteProject() {
-    if (!window.confirm("Delete this project?")) {
-      return;
-    }
-    await apiFetch(`/api/projects/${projectId}`, {
-      method: "DELETE",
-    });
-    navigate("/");
-  }
+      if (sourceFile) {
+        const formData = new FormData();
+        formData.set("file", sourceFile);
+        formData.set("fileName", sourceFile.name);
 
-  async function handleDeleteLanguage(languageCode) {
-    if (!window.confirm(`Delete ${languageCode}?`)) {
-      return;
-    }
-    await apiFetch(`/api/projects/${projectId}/languages/${languageCode}`, {
-      method: "DELETE",
-    });
-    await loadData();
-  }
+        updated = await apiFetch(`/api/projects/${projectId}/languages/${projectSettings.sourceLanguage}/upload`, {
+          method: "POST",
+          body: formData,
+        });
+      }
 
-  async function handleMakeSource(languageCode) {
-    await apiFetch(`/api/projects/${projectId}/source`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ languageCode }),
-    });
-    await loadData();
+      setProject(updated);
+      setProjectSettings({
+        name: updated.name || "",
+        description: updated.description || "",
+        version: updated.version || "",
+        sourceLanguage: updated.sourceLanguage || "",
+      });
+      closeEditProjectDialog();
+      showToast(
+        "success",
+        sourceFile ? "Project details and source file updated." : "Project details updated.",
+      );
+    } catch (requestError) {
+      showToast("error", requestError.message);
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function handleReplaceLanguageFile(languageCode, file) {
-    const body = new FormData();
-    body.append("file", file);
-    body.append("fileName", file.name);
-    await apiFetch(`/api/projects/${projectId}/languages/${languageCode}/upload`, {
-      method: "POST",
-      body,
-    });
-    await loadData();
+    if (!file) {
+      return;
+    }
+
+    setUploadingLanguageCode(languageCode);
+
+    try {
+      const formData = new FormData();
+      formData.set("file", file);
+      formData.set("fileName", file.name);
+
+      const updated = await apiFetch(`/api/projects/${projectId}/languages/${languageCode}/upload`, {
+        method: "POST",
+        body: formData,
+      });
+
+      setProject(updated);
+      closeLanguageActionMenu();
+      showToast("success", "Translation file updated.");
+    } catch (requestError) {
+      showToast("error", requestError.message);
+    } finally {
+      setUploadingLanguageCode("");
+    }
+  }
+
+  async function handleDeleteProject() {
+    setBusy(true);
+
+    try {
+      await apiFetch(`/api/projects/${projectId}`, {
+        method: "DELETE",
+      });
+      closeDeleteProjectDialog();
+      showToast("success", "Project deleted.");
+      navigate("/");
+    } catch (requestError) {
+      showToast("error", requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDeleteLanguage() {
+    if (!languageToDelete) {
+      return;
+    }
+
+    setBusy(true);
+
+    try {
+      const updated = await apiFetch(`/api/projects/${projectId}/languages/${languageToDelete.code}`, {
+        method: "DELETE",
+      });
+      setProject(updated);
+      closeDeleteLanguageDialog();
+      closeLanguageActionMenu();
+      showToast("success", "Language deleted.");
+    } catch (requestError) {
+      showToast("error", requestError.message);
+    } finally {
+      setBusy(false);
+    }
   }
 
   if (loading) {
-    return <LoadingPage text="Loading project…" />;
+    return (
+      <section className="panel empty-state">
+        <h3>Loading project...</h3>
+      </section>
+    );
   }
 
   if (error) {
     return <section className="panel error-text">{error}</section>;
   }
 
-  return (
-    <main className="page-stack">
-      <section className="panel page-hero">
-        <div>
-          <p className="eyebrow">Project</p>
-          <h2>{project.name}</h2>
-          <p className="muted">{project.description || "No description yet."}</p>
-        </div>
-        <div className="hero-actions">
-          <span className="badge">Version {project.version || "n/a"}</span>
-          <span className="badge">Revision {project.currentRevision}</span>
-          <a className="ghost-button link-button" href={`/api/projects/${projectId}/download-all`}>
-            Download all
-          </a>
-          {roleAllows(user, "editor") && settings?.allowProjectDelete ? (
-            <button className="danger-button" type="button" onClick={handleDeleteProject}>
-              Delete project
-            </button>
-          ) : null}
-        </div>
-      </section>
+  if (!project) {
+    return null;
+  }
 
-      {roleAllows(user, "editor") ? (
-        <section className="dashboard-grid">
-          <form className="panel stack-form" onSubmit={handleUpdateProject}>
-            <div className="section-head">
+  return (
+    <>
+      <div className="page-stack">
+        <section className="page-hero panel">
+          <div>
+            <div className="project-hero-header">
               <div>
-                <p className="eyebrow">Project config</p>
-                <h3>Edit project</h3>
+                <p className="eyebrow">Project details</p>
+                <div className="title-with-action">
+                  <h2>{project.name}</h2>
+                  {roleAllows(user, "editor") ? (
+                    <button
+                      className="title-action"
+                      type="button"
+                      aria-label="Edit project details"
+                      onClick={openEditProjectDialog}
+                    >
+                      ✎
+                    </button>
+                  ) : null}
+                </div>
               </div>
+              {project.version ? (
+                <div className="detail-badges">
+                  <span className="pill">v{project.version}</span>
+                </div>
+              ) : null}
+            </div>
+            {project.description ? <p className="muted">{project.description}</p> : null}
+            <p className="muted">
+              Source language: <strong>{project.sourceLanguage.toUpperCase()}</strong>
+            </p>
+          </div>
+
+          <div className="hero-actions">
+            {roleAllows(user, "editor") ? (
+              <button
+                className="primary-button"
+                type="button"
+                onClick={openCreateLanguageDialog}
+                disabled={!availableLanguages.length}
+              >
+                <span className="button-icon" aria-hidden="true">
+                  ＋
+                </span>
+                Add language
+              </button>
+            ) : null}
+            <a className="secondary-button" href={`/api/projects/${project.id}/download-all`}>
+              <span className="button-icon" aria-hidden="true">
+                ⭳
+              </span>
+              Download all
+            </a>
+          </div>
+        </section>
+
+        {project.languages.length === 0 ? (
+          <section className="panel empty-state">
+            <h3>No languages yet</h3>
+          </section>
+        ) : (
+          <section className="project-language-grid">
+            {project.languages.map((language) => {
+              const display = languageDisplay(language.code, language.label);
+
+              return (
+                <article key={language.code} className="language-card panel">
+                  <div className="card-top">
+                    <div className="lang-title">
+                      <Flag code={display.code} label={display.label} className="flag" />
+                      <div>
+                        <strong>{display.label}</strong>
+                        <p className="muted code-label">{language.code.toUpperCase()}</p>
+                      </div>
+                    </div>
+                    {language.isSource ? <span className="pill">Source</span> : null}
+                  </div>
+
+                  <div className="progress-section">
+                    <div className="progress-copy">
+                      <span className="progress-label">Translation progress</span>
+                      <span className="muted progress-stats">
+                        Translated: {language.progress.completed} · Total: {language.progress.total}
+                      </span>
+                    </div>
+                    <div
+                      className="progress-track"
+                      role="progressbar"
+                      aria-valuemin="0"
+                      aria-valuemax="100"
+                      aria-valuenow={language.progress.percent}
+                      aria-label="Translation progress"
+                    >
+                      <div className="progress-bar" style={{ width: `${language.progress.percent}%` }}>
+                        <span className="progress-value">{language.progress.percent}%</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="card-actions">
+                    <Link className="primary-button" to={`/projects/${project.id}/languages/${language.code}/edit`}>
+                      <span className="button-icon" aria-hidden="true">
+                        ✎
+                      </span>
+                      Edit
+                    </Link>
+                    <button
+                      className="secondary-button action-menu-button"
+                      type="button"
+                      aria-label={`Open actions for ${display.label}`}
+                      onClick={() => setLanguageActionMenu(language)}
+                    >
+                      ⋯
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+          </section>
+        )}
+      </div>
+
+      {isDialogOpen ? (
+        <div className="dialog-backdrop">
+          <div className="dialog panel dialog-compact" onClick={(event) => event.stopPropagation()}>
+            <div className="dialog-header">
+              <div>
+                <h2>Add language</h2>
+              </div>
+              <button className="dialog-close" type="button" aria-label="Close dialog" onClick={closeCreateLanguageDialog}>
+                ×
+              </button>
             </div>
 
-            <label>
-              <span>Name</span>
-              <input
-                value={editForm.name}
-                onChange={(event) => setEditForm((current) => ({ ...current, name: event.target.value }))}
-              />
-            </label>
+            {availableLanguages.length === 0 ? (
+              <div className="empty-state">
+                <h3>All available languages already exist</h3>
+              </div>
+            ) : (
+              <form className="stack-form" onSubmit={handleCreateLanguage}>
+                <FlagSelect value={selectedCode} options={availableLanguages} onChange={setSelectedCode} />
 
-            <label>
-              <span>Description</span>
-              <textarea
-                rows={3}
-                value={editForm.description}
-                onChange={(event) => setEditForm((current) => ({ ...current, description: event.target.value }))}
-              />
-            </label>
+                <label>
+                  <span>Existing translation file (optional)</span>
+                  <div
+                    className={`dropzone dropzone-compact ${isLanguageFileHovering ? "hover" : ""}`}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      setIsLanguageFileHovering(true);
+                    }}
+                    onDragLeave={() => setIsLanguageFileHovering(false)}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      setIsLanguageFileHovering(false);
+                      setLanguageFile(event.dataTransfer.files?.[0] || null);
+                    }}
+                  >
+                    <input
+                      id="language-upload-file"
+                      type="file"
+                      accept=".json,application/json"
+                      onChange={(event) => setLanguageFile(event.target.files?.[0] || null)}
+                    />
+                    <label htmlFor="language-upload-file" className="dropzone-content">
+                      <strong>{languageFile ? languageFile.name : "Drop JSON file here"}</strong>
+                      <span>
+                        {languageFile
+                          ? "This file will be used to initialize the new language."
+                          : "Optional: upload an existing translation or create an empty language."}
+                      </span>
+                    </label>
+                  </div>
+                </label>
 
-            <div className="split-grid">
+                <button className="primary-button" disabled={busy} type="submit">
+                  {busy ? "Adding..." : languageFile ? "Add from file" : "Add"}
+                </button>
+              </form>
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      {isEditDialogOpen ? (
+        <div className="dialog-backdrop">
+          <div className="dialog panel dialog-compact" onClick={(event) => event.stopPropagation()}>
+            <div className="dialog-header">
+              <div>
+                <h2>Edit project</h2>
+              </div>
+              <button className="dialog-close" type="button" aria-label="Close dialog" onClick={closeEditProjectDialog}>
+                ×
+              </button>
+            </div>
+
+            <form className="stack-form" onSubmit={handleUpdateProject}>
+              <label>
+                <span>Name</span>
+                <input
+                  required
+                  value={projectSettings.name}
+                  onChange={(event) =>
+                    setProjectSettings((current) => ({ ...current, name: event.target.value }))
+                  }
+                />
+              </label>
+
+              <label>
+                <span>Description</span>
+                <textarea
+                  rows="4"
+                  value={projectSettings.description}
+                  onChange={(event) =>
+                    setProjectSettings((current) => ({ ...current, description: event.target.value }))
+                  }
+                />
+              </label>
+
               <label>
                 <span>Version</span>
                 <input
-                  value={editForm.version}
-                  onChange={(event) => setEditForm((current) => ({ ...current, version: event.target.value }))}
+                  value={projectSettings.version}
+                  onChange={(event) =>
+                    setProjectSettings((current) => ({ ...current, version: event.target.value }))
+                  }
                 />
               </label>
 
+              <FlagSelect
+                label="Source language"
+                value={projectSettings.sourceLanguage}
+                options={project.languages.map((language) => ({
+                  code: language.code,
+                  label: language.label,
+                }))}
+                onChange={(nextCode) =>
+                  setProjectSettings((current) => ({ ...current, sourceLanguage: nextCode }))
+                }
+              />
+
               <label>
-                <span>Source language</span>
-                <select
-                  value={editForm.sourceLanguage}
-                  onChange={(event) =>
-                    setEditForm((current) => ({ ...current, sourceLanguage: event.target.value }))
-                  }
+                <span>Source language file (optional)</span>
+                <div
+                  className={`dropzone dropzone-compact ${isSourceFileHovering ? "hover" : ""}`}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    setIsSourceFileHovering(true);
+                  }}
+                  onDragLeave={() => setIsSourceFileHovering(false)}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    setIsSourceFileHovering(false);
+                    setSourceFile(event.dataTransfer.files?.[0] || null);
+                  }}
                 >
-                  {project.languages.map((language) => (
-                    <option key={language.id} value={language.code}>
-                      {language.label} ({language.code})
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            <button className="primary-button" type="submit">
-              Save project
-            </button>
-          </form>
-
-          <form className="panel stack-form" onSubmit={handleAddLanguage}>
-            <div className="section-head">
-              <div>
-                <p className="eyebrow">Languages</p>
-                <h3>Add language</h3>
-              </div>
-            </div>
-
-            <div className="split-grid">
-              <label>
-                <span>Code</span>
-                <input
-                  value={languageForm.code}
-                  onChange={(event) => setLanguageForm((current) => ({ ...current, code: event.target.value }))}
-                  required
-                />
-              </label>
-              <label>
-                <span>Label</span>
-                <input
-                  value={languageForm.label}
-                  onChange={(event) => setLanguageForm((current) => ({ ...current, label: event.target.value }))}
-                  required
-                />
-              </label>
-            </div>
-
-            <label>
-              <span>Origin</span>
-              <select
-                value={languageForm.mode}
-                onChange={(event) => setLanguageForm((current) => ({ ...current, mode: event.target.value }))}
-              >
-                <option value="empty">Blank</option>
-                <option value="upload">Upload</option>
-                <option value="library">Library</option>
-              </select>
-            </label>
-
-            {languageForm.mode === "library" ? (
-              <label>
-                <span>Library file</span>
-                <select
-                  value={languageForm.libraryFile}
-                  onChange={(event) =>
-                    setLanguageForm((current) => ({ ...current, libraryFile: event.target.value }))
-                  }
-                  required
-                >
-                  <option value="">Select a JSON file</option>
-                  {libraryFiles.map((file) => (
-                    <option key={file.fileName} value={file.fileName}>
-                      {file.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
-
-            {languageForm.mode === "upload" ? (
-              <label>
-                <span>Translation file</span>
-                <input
-                  type="file"
-                  accept="application/json,.json"
-                  onChange={(event) =>
-                    setLanguageForm((current) => ({ ...current, file: event.target.files?.[0] || null }))
-                  }
-                  required
-                />
-              </label>
-            ) : null}
-
-            <button className="primary-button" type="submit">
-              Add language
-            </button>
-          </form>
-        </section>
-      ) : null}
-
-      <section className="cards-grid">
-        {project.languages.map((language) => (
-          <article className="panel language-card" key={language.id}>
-            <div className="card-top">
-              <div className="lang-title">
-                <Flag code={language.code} label={language.label} />
-                <div>
-                  <strong>{language.label}</strong>
-                  <p className="muted">
-                    {language.code.toUpperCase()} · {language.origin}
-                  </p>
+                  <input
+                    id="project-source-update-file"
+                    type="file"
+                    accept=".json,application/json"
+                    onChange={(event) => setSourceFile(event.target.files?.[0] || null)}
+                  />
+                  <label htmlFor="project-source-update-file" className="dropzone-content">
+                    <strong>{sourceFile ? sourceFile.name : "Drop JSON file here"}</strong>
+                    <span>
+                      {sourceFile
+                        ? "This file will replace the selected source language file."
+                        : "Optional: upload a new source language file while saving project details."}
+                    </span>
+                  </label>
                 </div>
-              </div>
-              {language.isSource ? <span className="badge badge-accent">Source</span> : null}
-            </div>
+              </label>
 
-            <div className="detail-badges">
-              <span className="badge">{progressLabel(language.progress)}</span>
-              <span className="badge">created {new Date(language.createdAt).toLocaleDateString()}</span>
-            </div>
-
-            <div className="card-actions wrap-actions">
-              <Link className="primary-button link-button" to={`/projects/${projectId}/languages/${language.code}/edit`}>
-                Open editor
-              </Link>
-              <a className="ghost-button link-button" href={`/api/projects/${projectId}/download/${language.code}`}>
-                Download JSON
-              </a>
-              {roleAllows(user, "editor") && !language.isSource ? (
-                <button className="ghost-button" type="button" onClick={() => handleMakeSource(language.code)}>
-                  Make source
+              <button className="primary-button" disabled={busy} type="submit">
+                {busy ? "Saving..." : "Save changes"}
+              </button>
+              {settings?.allowProjectDelete ? (
+                <button className="danger-button" disabled={busy} type="button" onClick={() => setDeleteProjectOpen(true)}>
+                  Delete project
                 </button>
               ) : null}
+            </form>
+          </div>
+        </div>
+      ) : null}
+
+      {deleteProjectOpen ? (
+        <div className="dialog-backdrop">
+          <div className="dialog panel dialog-compact" onClick={(event) => event.stopPropagation()}>
+            <div className="dialog-header">
+              <div>
+                <h2>Delete project</h2>
+              </div>
+              <button className="dialog-close" type="button" aria-label="Close dialog" onClick={closeDeleteProjectDialog}>
+                ×
+              </button>
+            </div>
+
+            <div className="dialog-copy">
+              <p className="muted">
+                Delete <strong>{project.name}</strong> and all of its language files? This cannot be undone.
+              </p>
+            </div>
+
+            <div className="dialog-actions">
+              <button className="secondary-button" type="button" onClick={closeDeleteProjectDialog}>
+                Cancel
+              </button>
+              <button className="danger-button" type="button" disabled={busy} onClick={handleDeleteProject}>
+                {busy ? "Deleting..." : "Delete project"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {languageToDelete ? (
+        <div className="dialog-backdrop">
+          <div className="dialog panel dialog-compact" onClick={(event) => event.stopPropagation()}>
+            <div className="dialog-header">
+              <div>
+                <h2>Delete language</h2>
+              </div>
+              <button className="dialog-close" type="button" aria-label="Close dialog" onClick={closeDeleteLanguageDialog}>
+                ×
+              </button>
+            </div>
+
+            <div className="dialog-copy">
+              <p className="muted">
+                Delete <strong>{languageDisplay(languageToDelete.code, languageToDelete.label).label}</strong> from
+                this project? This cannot be undone.
+              </p>
+            </div>
+
+            <div className="dialog-actions">
+              <button className="secondary-button" type="button" onClick={closeDeleteLanguageDialog}>
+                Cancel
+              </button>
+              <button className="danger-button" type="button" disabled={busy} onClick={handleDeleteLanguage}>
+                {busy ? "Deleting..." : "Delete language"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {languageActionMenu ? (
+        <div className="dialog-backdrop">
+          <div className="dialog panel dialog-compact" onClick={(event) => event.stopPropagation()}>
+            <div className="dialog-header">
+              <div>
+                <h2>{languageDisplay(languageActionMenu.code, languageActionMenu.label).label}</h2>
+              </div>
+              <button className="dialog-close" type="button" aria-label="Close dialog" onClick={closeLanguageActionMenu}>
+                ×
+              </button>
+            </div>
+
+            <div className="dialog-actions dialog-actions-stacked">
+              <a
+                className="secondary-button"
+                href={`/api/projects/${project.id}/download/${languageActionMenu.code}`}
+                onClick={closeLanguageActionMenu}
+              >
+                <span className="button-icon" aria-hidden="true">
+                  ⭳
+                </span>
+                Download
+              </a>
               {roleAllows(user, "editor") ? (
-                <label className="ghost-button upload-button">
-                  Replace JSON
+                <label className="secondary-button upload-button">
                   <input
                     type="file"
-                    accept="application/json,.json"
+                    accept=".json,application/json"
+                    disabled={busy || uploadingLanguageCode === languageActionMenu.code}
                     onChange={(event) => {
-                      const file = event.target.files?.[0];
-                      if (file) {
-                        handleReplaceLanguageFile(language.code, file);
-                      }
+                      void handleReplaceLanguageFile(languageActionMenu.code, event.target.files?.[0] || null);
+                      event.target.value = "";
                     }}
                   />
+                  <span className="button-icon" aria-hidden="true">
+                    ⭱
+                  </span>
+                  {uploadingLanguageCode === languageActionMenu.code ? "Uploading..." : "Upload"}
                 </label>
               ) : null}
-              {roleAllows(user, "editor") && settings?.allowLanguageDelete && !language.isSource ? (
-                <button className="danger-button" type="button" onClick={() => handleDeleteLanguage(language.code)}>
+              {!languageActionMenu.isSource && roleAllows(user, "editor") && settings?.allowLanguageDelete ? (
+                <button
+                  className="danger-button"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    setLanguageToDelete(languageActionMenu);
+                    closeLanguageActionMenu();
+                  }}
+                >
+                  <span className="button-icon" aria-hidden="true">
+                    ×
+                  </span>
                   Delete
                 </button>
               ) : null}
             </div>
-          </article>
-        ))}
-      </section>
-
-      <section className="panel page-stack">
-        <div className="section-head">
-          <div>
-            <p className="eyebrow">Versions</p>
-            <h3>Revision history</h3>
           </div>
         </div>
-
-        <div className="version-list">
-          {versions.map((version) => (
-            <div className="version-row" key={version.id}>
-              <strong>Revision {version.revision}</strong>
-              <span className="muted">
-                {version.version_label || "no version label"} ·{" "}
-                {new Date(version.created_at).toLocaleString()}
-              </span>
-            </div>
-          ))}
-        </div>
-      </section>
-    </main>
+      ) : null}
+    </>
   );
 }
 
 function EditorPage() {
-  const { user } = useApp();
+  const { showToast } = useOutletContext();
   const { projectId, languageCode } = useParams();
-  const [rows, setRows] = useState([]);
-  const [meta, setMeta] = useState(null);
-  const [filter, setFilter] = useState("");
-  const deferredFilter = useDeferredValue(filter);
+  const { user } = useApp();
+  const [project, setProject] = useState(null);
+  const [editorData, setEditorData] = useState(null);
+  const [editorDraft, setEditorDraft] = useState({});
+  const [searchQuery, setSearchQuery] = useState("");
+  const deferredSearchQuery = useDeferredValue(searchQuery);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  async function loadData() {
-    setLoading(true);
-    setError("");
-    try {
-      const payload = await apiFetch(`/api/projects/${projectId}/languages/${languageCode}`);
-      setRows(payload.rows);
-      setMeta(payload);
-    } catch (loadError) {
-      setError(loadError.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
   useEffect(() => {
-    loadData();
+    let active = true;
+
+    async function loadEditorPage() {
+      setLoading(true);
+      setError("");
+
+      try {
+        const [projectDetails, editorDetails] = await Promise.all([
+          apiFetch(`/api/projects/${projectId}`),
+          apiFetch(`/api/projects/${projectId}/languages/${languageCode}`),
+        ]);
+
+        if (active) {
+          setProject(projectDetails);
+          setEditorData(editorDetails);
+          setEditorDraft(
+            Object.fromEntries(editorDetails.rows.map((row) => [row.key, row.translation ?? ""])),
+          );
+        }
+      } catch (requestError) {
+        if (active) {
+          setError(requestError.message);
+        }
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    }
+
+    void loadEditorPage();
+
+    return () => {
+      active = false;
+    };
   }, [projectId, languageCode]);
 
-  const visibleRows = useMemo(() => {
-    const query = deferredFilter.trim().toLowerCase();
-    if (!query) {
-      return rows;
-    }
-    return rows.filter(
-      (row) =>
-        row.key.toLowerCase().includes(query) ||
-        String(row.source).toLowerCase().includes(query) ||
-        String(row.translation).toLowerCase().includes(query),
-    );
-  }, [deferredFilter, rows]);
+  const editorLanguage = useMemo(
+    () => project?.languages.find((language) => language.code === languageCode) || null,
+    [project, languageCode],
+  );
 
-  async function handleSave() {
-    setSaving(true);
-    setMessage("");
-    setError("");
+  const filteredRows = useMemo(() => {
+    if (!editorData) {
+      return [];
+    }
+
+    const normalizedQuery = deferredSearchQuery.trim().toLowerCase();
+    if (!normalizedQuery) {
+      return editorData.rows;
+    }
+
+    return editorData.rows.filter((row) => {
+      const sourceValue = String(row.source ?? "").toLowerCase();
+      const translatedValue = String(editorDraft[row.key] ?? row.translation ?? "").toLowerCase();
+
+      return (
+        row.key.toLowerCase().includes(normalizedQuery) ||
+        sourceValue.includes(normalizedQuery) ||
+        translatedValue.includes(normalizedQuery)
+      );
+    });
+  }, [deferredSearchQuery, editorData, editorDraft]);
+
+  async function handleSaveTranslations() {
+    if (!editorData) {
+      return;
+    }
+
+    setBusy(true);
+
     try {
-      const entries = Object.fromEntries(rows.map((row) => [row.key, row.translation]));
-      const payload = await apiFetch(`/api/projects/${projectId}/languages/${languageCode}`, {
+      const result = await apiFetch(`/api/projects/${projectId}/languages/${languageCode}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ entries }),
+        body: JSON.stringify({ entries: editorDraft }),
       });
-      setMeta((current) => ({ ...current, progress: payload.progress }));
-      setMessage("Translations saved.");
-    } catch (saveError) {
-      setError(saveError.message);
+
+      setEditorData((current) =>
+        current
+          ? {
+              ...current,
+              progress: result.progress,
+              rows: current.rows.map((row) => ({
+                ...row,
+                translation: editorDraft[row.key] ?? "",
+              })),
+            }
+          : current,
+      );
+      showToast("success", `Saved. ${progressLabel(result.progress)}`);
+    } catch (requestError) {
+      showToast("error", requestError.message);
     } finally {
-      setSaving(false);
+      setBusy(false);
     }
   }
 
   if (loading) {
-    return <LoadingPage text="Loading editor…" />;
+    return (
+      <section className="panel empty-state">
+        <h3>Loading editor...</h3>
+      </section>
+    );
+  }
+
+  if (error) {
+    return <section className="panel error-text">{error}</section>;
+  }
+
+  if (!project || !editorData || !editorLanguage) {
+    return null;
   }
 
   return (
-    <main className="page-stack">
-      <section className="panel page-hero">
+    <section className="panel editor-panel">
+      <div className="editor-header">
         <div>
-          <p className="eyebrow">Editor</p>
-          <h2>
-            {languageCode.toUpperCase()} against {meta.sourceLanguage.toUpperCase()}
+          <p className="eyebrow">Translation editor</p>
+          <h2 className="editor-title">
+            <Link className="back-link" to={`/projects/${project.id}`}>
+              ‹
+            </Link>
+            <span className="editor-title-text">
+              <Flag code={editorLanguage.code} label={editorLanguage.label} className="editor-flag" />{" "}
+              {editorLanguage.label}
+            </span>
           </h2>
-          <p className="muted">Viewer accounts can inspect entries, editors and admins can save changes.</p>
+          <p className="muted">
+            Progress: {editorData.progress.percent}% · Translated strings: {editorData.progress.completed}/
+            {editorData.progress.total}
+          </p>
         </div>
-        <div className="hero-actions">
-          <span className="badge">{progressLabel(meta.progress)}</span>
-          <Link className="ghost-button link-button" to={`/projects/${projectId}`}>
-            Back to project
-          </Link>
-          {roleAllows(user, "editor") ? (
-            <button className="primary-button" type="button" onClick={handleSave} disabled={saving}>
-              {saving ? "Saving…" : "Save"}
-            </button>
-          ) : null}
-        </div>
-      </section>
 
-      <section className="panel page-stack">
-        <label>
-          <span>Filter keys or texts</span>
-          <input value={filter} onChange={(event) => setFilter(event.target.value)} />
+        {roleAllows(user, "editor") ? (
+          <button className="primary-button" disabled={busy} type="button" onClick={handleSaveTranslations}>
+            <span className="button-icon" aria-hidden="true">
+              ✎
+            </span>
+            {busy ? "Saving..." : "Save progress"}
+          </button>
+        ) : null}
+      </div>
+
+      <div className="editor-list">
+        <label className="editor-search">
+          <span>Search translations</span>
+          <input
+            type="search"
+            placeholder="Search by key, source text, or translation..."
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+          />
         </label>
 
-        {message ? <p className="success-text">{message}</p> : null}
-        {error ? <p className="error-text">{error}</p> : null}
-
-        <div className="editor-list">
-          {visibleRows.map((row) => (
-            <article className="panel editor-row" key={row.key}>
-              <div className="editor-meta">
-                <strong>{row.key}</strong>
-              </div>
-              <label>
-                <span>Source</span>
-                <textarea value={row.source} readOnly rows={3} />
+        {filteredRows.length === 0 ? (
+          <div className="empty-state editor-empty-state">
+            <h3>No matching translations</h3>
+            <p className="muted">Try a different search term for the key, source text, or translation.</p>
+          </div>
+        ) : (
+          filteredRows.map((row) => (
+            <div className="editor-row" key={row.key}>
+              <label className="editor-field">
+                <span className="field-key">{row.key}</span>
+                <input readOnly value={String(row.source ?? "")} />
               </label>
-              <label>
-                <span>Translation</span>
-                <textarea
-                  value={row.translation}
-                  rows={3}
+
+              <label className="editor-field editor-field-editable">
+                <span className="field-key field-key-placeholder">{row.key}</span>
+                <input
                   readOnly={!roleAllows(user, "editor")}
+                  value={String(editorDraft[row.key] ?? "")}
                   onChange={(event) =>
-                    setRows((current) =>
-                      current.map((item) =>
-                        item.key === row.key ? { ...item, translation: event.target.value } : item,
-                      ),
-                    )
+                    setEditorDraft((current) => ({
+                      ...current,
+                      [row.key]: event.target.value,
+                    }))
                   }
                 />
               </label>
-            </article>
-          ))}
-        </div>
-      </section>
-    </main>
+            </div>
+          ))
+        )}
+      </div>
+    </section>
   );
 }
 
