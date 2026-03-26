@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - dev
   schedule:
     - cron: "0 2 * * *"
   workflow_dispatch:
@@ -23,7 +24,7 @@ jobs:
       - name: Select ref
         id: ref
         run: |
-          if [ "${{ github.event_name }}" = "schedule" ]; then
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.ref_name }}" = "dev" ]; then
             echo "git_ref=dev" >> "$GITHUB_OUTPUT"
             echo "tag_prefix=nightly" >> "$GITHUB_OUTPUT"
             echo "extra_tag=nightly-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
