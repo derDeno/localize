@@ -1,6 +1,6 @@
 const path = require("node:path");
 
-const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data");
+const DATA_DIR = "/app/data";
 
 module.exports = {
   PORT: Number(process.env.PORT || 3001),
