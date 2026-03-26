@@ -138,6 +138,47 @@ textarea {
   min-height: 108px;
 }
 
+input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 0.45rem;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  margin: 0;
+  transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+input[type="checkbox"]::after {
+  content: "";
+  width: 0.38rem;
+  height: 0.72rem;
+  border-right: 0.16rem solid transparent;
+  border-bottom: 0.16rem solid transparent;
+  transform: rotate(45deg) scale(0);
+  transition: transform 160ms ease, border-color 160ms ease;
+}
+
+input[type="checkbox"]:checked {
+  background: linear-gradient(135deg, var(--accent) 0%, #ffb44d 100%);
+  border-color: rgba(240, 138, 36, 0.72);
+  box-shadow: 0 0 0 4px rgba(240, 138, 36, 0.14);
+}
+
+input[type="checkbox"]:checked::after {
+  border-color: var(--accent-contrast);
+  transform: rotate(45deg) scale(1);
+}
+
+input[type="checkbox"]:focus-visible {
+  box-shadow: 0 0 0 4px rgba(240, 138, 36, 0.18);
+}
+
 .app-shell {
   min-height: 100vh;
   padding: 24px;
@@ -153,15 +194,21 @@ textarea {
 .stack-form,
 .editor-list,
 .version-list,
-.project-language-grid {
+.project-language-grid,
+.profile-summary-grid {
   display: grid;
   gap: 20px;
 }
 
 .dashboard-grid,
 .project-language-grid,
-.split-grid {
+.split-grid,
+.profile-summary-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.profile-password-form {
+  margin-top: 4px;
 }
 
 .cards-grid {
@@ -197,6 +244,21 @@ textarea {
   text-align: center;
   letter-spacing: 0.08em;
   text-transform: lowercase;
+}
+
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--muted);
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line);
 }
 
 .topbar,
@@ -312,6 +374,13 @@ textarea {
   min-width: 0;
 }
 
+.page-hero .detail-badges {
+  position: absolute;
+  top: 22px;
+  right: 22px;
+  justify-content: flex-end;
+}
+
 .project-hero-header {
   display: flex;
   align-items: flex-start;
@@ -347,6 +416,10 @@ textarea {
 
 .project-card {
   min-height: 180px;
+}
+
+.project-card strong {
+  font-size: 1.2rem;
 }
 
 .project-card-actions {
@@ -462,6 +535,10 @@ textarea {
   background: rgba(240, 138, 36, 0.12);
 }
 
+.settings-tabbar {
+  margin-top: -4px;
+}
+
 .primary-button:disabled,
 .secondary-button:disabled,
 .danger-button:disabled,
@@ -546,13 +623,21 @@ textarea {
   width: 76px;
   height: 42px;
   padding: 5px;
+  border: 0;
   border-radius: 999px;
-  background: var(--bg-soft);
+  background: color-mix(in srgb, var(--bg-soft) 72%, transparent);
   display: inline-flex;
   align-items: center;
   justify-content: space-between;
   position: relative;
   overflow: hidden;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--line) 55%, transparent);
+  transition: background 160ms ease, box-shadow 160ms ease;
+}
+
+.switch:hover {
+  background: color-mix(in srgb, var(--bg-soft) 88%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--line) 72%, transparent);
 }
 
 .switch-thumb {
@@ -962,6 +1047,48 @@ textarea {
   color: inherit;
 }
 
+.users-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--bg-soft);
+}
+
+.users-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 640px;
+}
+
+.users-table th,
+.users-table td {
+  padding: 14px 16px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+
+.users-table th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+
+.users-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.actions-cell {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.table-action-button {
+  width: 40px;
+  height: 40px;
+  font-size: 1.35rem;
+}
+
 .toggle-row {
   display: flex;
   align-items: center;
@@ -969,7 +1096,7 @@ textarea {
 }
 
 .toggle-row input {
-  width: auto;
+  width: 1.35rem;
 }
 
 .editor-row {

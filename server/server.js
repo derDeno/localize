@@ -272,6 +272,35 @@ async function queryOne(text, params = [], client = pool) {
   return result.rows[0] || null;
 }
 
+async function countActiveAdmins(excludedUserId = null) {
+  const result = await pool.query(
+    `
+      SELECT COUNT(*)::int AS count
+      FROM users
+      WHERE deleted_at IS NULL
+        AND role = 'admin'
+        AND status = 'active'
+        AND ($1::uuid IS NULL OR id <> $1)
+    `,
+    [excludedUserId],
+  );
+  return result.rows[0]?.count || 0;
+}
+
+async function ensureAdminRetention(existingUser, nextRole, nextStatus) {
+  const removesAdminAccess =
+    existingUser.role === "admin" && (nextRole !== "admin" || nextStatus !== "active");
+
+  if (!removesAdminAccess) {
+    return;
+  }
+
+  const remainingAdmins = await countActiveAdmins(existingUser.id);
+  if (remainingAdmins < 1) {
+    throw createError("At least one active admin must remain.", 400);
+  }
+}
+
 async function getAppSettings(client = pool) {
   const row = await queryOne(
     `
@@ -284,6 +313,14 @@ async function getAppSettings(client = pool) {
         sso_issuer_url,
         sso_client_id,
         sso_client_secret,
+        sso_password_login_enabled,
+        sso_auto_provision_enabled,
+        sso_auto_provision_role_mode,
+        sso_auto_provision_default_role,
+        sso_role_sync_mode,
+        sso_admin_group,
+        sso_editor_group,
+        sso_viewer_group,
         updated_at
       FROM app_settings
       WHERE id = TRUE
@@ -302,6 +339,19 @@ async function getAppSettings(client = pool) {
       issuerUrl: row?.sso_issuer_url || "",
       clientId: row?.sso_client_id || "",
       clientSecret: row?.sso_client_secret || "",
+      passwordLoginEnabled: Boolean(row?.sso_password_login_enabled ?? true),
+      autoProvisionEnabled: Boolean(row?.sso_auto_provision_enabled),
+      autoProvisionRoleMode:
+        row?.sso_auto_provision_role_mode === "identity_mapping" ? "identity_mapping" : "default_role",
+      autoProvisionDefaultRole: roleRank[row?.sso_auto_provision_default_role]
+        ? row.sso_auto_provision_default_role
+        : "viewer",
+      roleSyncMode: row?.sso_role_sync_mode === "each_login" ? "each_login" : "first_login",
+      roleMappings: {
+        admin: row?.sso_admin_group || "",
+        editor: row?.sso_editor_group || "",
+        viewer: row?.sso_viewer_group || "",
+      },
     },
     updatedAt: row?.updated_at || null,
   };
@@ -719,6 +769,9 @@ app.post("/api/auth/register", async (req, res, next) => {
     if (!settings.allowRegistration) {
       return res.status(403).json({ message: "New user registration is currently disabled." });
     }
+    if (!settings.sso.passwordLoginEnabled) {
+      return res.status(403).json({ message: "Email/password sign-up is disabled. Please use SSO." });
+    }
 
     const firstName = String(req.body.firstName || "").trim();
     const lastName = String(req.body.lastName || "").trim();
@@ -763,6 +816,11 @@ app.post("/api/auth/register", async (req, res, next) => {
 
 app.post("/api/auth/login", async (req, res, next) => {
   try {
+    const settings = await getAppSettings();
+    if (!settings.sso.passwordLoginEnabled) {
+      return res.status(403).json({ message: "Email/password sign-in is disabled. Please use SSO." });
+    }
+
     const email = String(req.body.email || "").trim().toLowerCase();
     const password = String(req.body.password || "");
 
@@ -776,7 +834,15 @@ app.post("/api/auth/login", async (req, res, next) => {
       [email],
     );
 
-    if (!user || user.status !== "active" || !(await verifyPassword(password, user.password_hash))) {
+    if (!user) {
+      return res.status(401).json({ message: "The email or password is incorrect." });
+    }
+
+    if (user.status !== "active") {
+      return res.status(403).json({ message: "This account is inactive. Please contact an administrator." });
+    }
+
+    if (!(await verifyPassword(password, user.password_hash))) {
       return res.status(401).json({ message: "The email or password is incorrect." });
     }
 
@@ -811,6 +877,36 @@ app.post("/api/auth/logout", (req, res) => {
 
 app.get("/api/auth/me", requireAuth, (req, res) => {
   res.json({ user: sanitizeUser(req.currentUser) });
+});
+
+app.post("/api/auth/change-password", requireAuth, async (req, res, next) => {
+  try {
+    const currentPassword = String(req.body.currentPassword || "");
+    const newPassword = String(req.body.newPassword || "");
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ message: "Current password and new password are required." });
+    }
+
+    if (!(await verifyPassword(currentPassword, req.currentUser.password_hash))) {
+      return res.status(401).json({ message: "The current password is incorrect." });
+    }
+
+    const passwordHash = await hashPassword(newPassword);
+    const user = await queryOne(
+      `
+        UPDATE users
+        SET password_hash = $2, updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [req.currentUser.id, passwordHash],
+    );
+
+    res.json({ user: sanitizeUser(user) });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get("/api/users", requireRole("admin"), async (_req, res, next) => {
@@ -886,6 +982,7 @@ app.patch("/api/users/:userId", requireRole("admin"), async (req, res, next) => 
     const role = roleRank[req.body.role] ? req.body.role : existing.role;
     const status = ["active", "invited", "disabled"].includes(req.body.status) ? req.body.status : existing.status;
     const passwordHash = req.body.password ? await hashPassword(String(req.body.password)) : existing.password_hash;
+    await ensureAdminRetention(existing, role, status);
 
     const user = await queryOne(
       `
@@ -905,6 +1002,114 @@ app.patch("/api/users/:userId", requireRole("admin"), async (req, res, next) => 
     );
 
     res.json(sanitizeUser(user));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/users/:userId/role", requireRole("admin"), async (req, res, next) => {
+  try {
+    const existing = await queryOne("SELECT * FROM users WHERE id = $1 AND deleted_at IS NULL", [req.params.userId]);
+    if (!existing) {
+      return res.status(404).json({ message: "The selected user was not found." });
+    }
+
+    const role = roleRank[req.body.role] ? req.body.role : "";
+    if (!role) {
+      return res.status(400).json({ message: "Please select a valid role." });
+    }
+
+    await ensureAdminRetention(existing, role, existing.status);
+
+    const user = await queryOne(
+      `
+        UPDATE users
+        SET role = $2, updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [req.params.userId, role],
+    );
+
+    res.json(sanitizeUser(user));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/users/:userId/reset-password", requireRole("admin"), async (req, res, next) => {
+  try {
+    const existing = await queryOne("SELECT * FROM users WHERE id = $1 AND deleted_at IS NULL", [req.params.userId]);
+    if (!existing) {
+      return res.status(404).json({ message: "The selected user was not found." });
+    }
+
+    const password = String(req.body.password || "");
+    if (!password) {
+      return res.status(400).json({ message: "A new password is required." });
+    }
+
+    const passwordHash = await hashPassword(password);
+    const user = await queryOne(
+      `
+        UPDATE users
+        SET password_hash = $2, updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [req.params.userId, passwordHash],
+    );
+
+    res.json(sanitizeUser(user));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/users/:userId/deactivate", requireRole("admin"), async (req, res, next) => {
+  try {
+    const existing = await queryOne("SELECT * FROM users WHERE id = $1 AND deleted_at IS NULL", [req.params.userId]);
+    if (!existing) {
+      return res.status(404).json({ message: "The selected user was not found." });
+    }
+
+    await ensureAdminRetention(existing, existing.role, "disabled");
+
+    const user = await queryOne(
+      `
+        UPDATE users
+        SET status = 'disabled', updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [req.params.userId],
+    );
+
+    res.json(sanitizeUser(user));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/users/:userId", requireRole("admin"), async (req, res, next) => {
+  try {
+    const existing = await queryOne("SELECT * FROM users WHERE id = $1 AND deleted_at IS NULL", [req.params.userId]);
+    if (!existing) {
+      return res.status(404).json({ message: "The selected user was not found." });
+    }
+
+    await ensureAdminRetention(existing, "viewer", "disabled");
+
+    await pool.query(
+      `
+        UPDATE users
+        SET deleted_at = NOW(), updated_at = NOW()
+        WHERE id = $1
+      `,
+      [req.params.userId],
+    );
+
+    res.status(204).end();
   } catch (error) {
     next(error);
   }
@@ -959,6 +1164,13 @@ app.get("/api/settings/sso", requireRole("admin"), async (_req, res, next) => {
 
 app.patch("/api/settings/sso", requireRole("admin"), async (req, res, next) => {
   try {
+    const autoProvisionRoleMode =
+      req.body.autoProvisionRoleMode === "identity_mapping" ? "identity_mapping" : "default_role";
+    const autoProvisionDefaultRole = roleRank[req.body.autoProvisionDefaultRole]
+      ? req.body.autoProvisionDefaultRole
+      : "viewer";
+    const roleSyncMode = req.body.roleSyncMode === "each_login" ? "each_login" : "first_login";
+
     await pool.query(
       `
         UPDATE app_settings
@@ -968,6 +1180,14 @@ app.patch("/api/settings/sso", requireRole("admin"), async (req, res, next) => {
           sso_issuer_url = $3,
           sso_client_id = $4,
           sso_client_secret = $5,
+          sso_password_login_enabled = $6,
+          sso_auto_provision_enabled = $7,
+          sso_auto_provision_role_mode = $8,
+          sso_auto_provision_default_role = $9,
+          sso_role_sync_mode = $10,
+          sso_admin_group = $11,
+          sso_editor_group = $12,
+          sso_viewer_group = $13,
           updated_at = NOW()
         WHERE id = TRUE
       `,
@@ -977,6 +1197,14 @@ app.patch("/api/settings/sso", requireRole("admin"), async (req, res, next) => {
         String(req.body.issuerUrl || "").trim(),
         String(req.body.clientId || "").trim(),
         String(req.body.clientSecret || "").trim(),
+        Boolean(req.body.passwordLoginEnabled ?? true),
+        Boolean(req.body.autoProvisionEnabled),
+        autoProvisionRoleMode,
+        autoProvisionDefaultRole,
+        roleSyncMode,
+        String(req.body.roleMappings?.admin || "").trim(),
+        String(req.body.roleMappings?.editor || "").trim(),
+        String(req.body.roleMappings?.viewer || "").trim(),
       ],
     );
 

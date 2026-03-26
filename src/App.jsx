@@ -11,6 +11,7 @@ import {
   useNavigate,
   useOutletContext,
   useParams,
+  useSearchParams,
 } from "react-router-dom";
 
 const languageMeta = {
@@ -470,11 +471,9 @@ function AppShell() {
           <NavLink className={({ isActive }) => `menu-link${isActive ? " active" : ""}`} to="/">
             Dashboard
           </NavLink>
-          {roleAllows(user, "admin") ? (
-            <NavLink className={({ isActive }) => `menu-link${isActive ? " active" : ""}`} to="/settings">
-              Settings
-            </NavLink>
-          ) : null}
+          <NavLink className={({ isActive }) => `menu-link${isActive ? " active" : ""}`} to="/settings">
+            Settings
+          </NavLink>
         </nav>
 
         <div className="topbar-actions">
@@ -535,7 +534,7 @@ function AppShell() {
                 <h2>Create project</h2>
               </div>
               <button
-                className="ghost-button dialog-close"
+                className="dialog-close"
                 type="button"
                 aria-label="Close dialog"
                 onClick={closeCreateDialog}
@@ -652,10 +651,21 @@ function AppShell() {
 
 function LoginPage() {
   const navigate = useNavigate();
-  const { refreshBootstrap } = useApp();
+  const { refreshBootstrap, settings } = useApp();
   const [form, setForm] = useState({ email: "", password: "" });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const passwordLoginEnabled = settings?.sso?.passwordLoginEnabled !== false;
+  const ssoEnabled = Boolean(settings?.sso?.enabled);
+
+  function handleSsoLogin() {
+    if (settings?.sso?.autoProvisionEnabled === false) {
+      navigate("/sso-status?reason=provisioning-disabled");
+      return;
+    }
+
+    navigate("/sso-status");
+  }
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -690,36 +700,87 @@ function LoginPage() {
         <form className="panel auth-card stack-form" onSubmit={handleSubmit}>
           <h1>Sign in</h1>
 
-          <label>
-            <span>Email</span>
-            <input
-              value={form.email}
-              onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))}
-              type="email"
-              required
-            />
-          </label>
+          {passwordLoginEnabled ? (
+            <>
+              <label>
+                <span>Email</span>
+                <input
+                  value={form.email}
+                  onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))}
+                  type="email"
+                  required
+                />
+              </label>
 
-          <label>
-            <span>Password</span>
-            <input
-              value={form.password}
-              onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))}
-              type="password"
-              required
-            />
-          </label>
+              <label>
+                <span>Password</span>
+                <input
+                  value={form.password}
+                  onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))}
+                  type="password"
+                  required
+                />
+              </label>
+            </>
+          ) : null}
 
           {error ? <p className="error-text">{error}</p> : null}
 
-          <button className="primary-button" type="submit" disabled={submitting}>
-            {submitting ? "Signing in…" : "Sign in"}
-          </button>
+          {passwordLoginEnabled ? (
+            <button className="primary-button" type="submit" disabled={submitting}>
+              {submitting ? "Signing in…" : "Sign in"}
+            </button>
+          ) : null}
 
-          <p className="muted">
-            No account yet? <Link to="/register">Register here</Link>
-          </p>
+          {passwordLoginEnabled && ssoEnabled ? (
+            <div className="auth-divider">
+              <span>or</span>
+            </div>
+          ) : null}
+
+          {ssoEnabled ? (
+            <button className="secondary-button" type="button" onClick={handleSsoLogin}>
+              Continue with SSO
+            </button>
+          ) : null}
+
+          {passwordLoginEnabled && settings?.allowRegistration ? (
+            <p className="muted">
+              No account yet? <Link to="/register">Register here</Link>
+            </p>
+          ) : null}
         </form>
+      </div>
+    </div>
+  );
+}
+
+function SsoStatusPage() {
+  const [searchParams] = useSearchParams();
+  const { settings } = useApp();
+  const reason = searchParams.get("reason") || "";
+
+  let title = "SSO sign-in";
+  let message = "SSO sign-in is not connected yet.";
+
+  if (reason === "inactive") {
+    title = "Account inactive";
+    message = "Your account is inactive. Please contact an administrator before signing in.";
+  } else if (reason === "provisioning-disabled" || settings?.sso?.autoProvisionEnabled === false) {
+    title = "Account access pending";
+    message = "Your account is not provisioned, and automatic SSO provisioning is disabled. Please contact an administrator.";
+  }
+
+  return (
+    <div className="screen-center">
+      <div className="panel auth-card stack-form">
+        <h1>{title}</h1>
+        <p className="muted">{message}</p>
+        <div>
+          <Link className="secondary-button" to="/login">
+            Back to sign in
+          </Link>
+        </div>
       </div>
     </div>
   );
@@ -737,6 +798,20 @@ function RegisterPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+
+  if (settings && settings.sso?.passwordLoginEnabled === false) {
+    return (
+      <div className="screen-center">
+        <div className="panel auth-card">
+          <h1>Email sign-up disabled</h1>
+          <p className="muted">This workspace only allows sign-in through SSO.</p>
+          <Link className="primary-button link-button" to="/login">
+            Back to sign in
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   if (settings && !settings.allowRegistration) {
     return (
@@ -1220,7 +1295,6 @@ function ProjectPage() {
           <div>
             <div className="project-hero-header">
               <div>
-                <p className="eyebrow">Project details</p>
                 <div className="title-with-action">
                   <h2>{project.name}</h2>
                   {roleAllows(user, "editor") ? (
@@ -1828,41 +1902,194 @@ function EditorPage() {
 }
 
 function SettingsPage() {
-  const [tab, setTab] = useState("users");
+  const { user } = useApp();
+  const isAdmin = roleAllows(user, "admin");
+  const [tab, setTab] = useState("profile");
+
+  useEffect(() => {
+    if (!isAdmin && tab !== "profile") {
+      setTab("profile");
+    }
+  }, [isAdmin, tab]);
+
   return (
     <main className="page-stack">
       <section className="panel page-hero">
         <div>
-          <p className="eyebrow">Administration</p>
           <h2>Settings</h2>
-          <p className="muted">User management, app controls, and SSO placeholders for the next stage.</p>
         </div>
       </section>
 
-      <section className="panel page-stack">
-        <div className="tab-row">
+      <div className="tab-row settings-tabbar">
+        <button className={tab === "profile" ? "tab-button active" : "tab-button"} onClick={() => setTab("profile")}>
+          Profile
+        </button>
+        {isAdmin ? (
           <button className={tab === "users" ? "tab-button active" : "tab-button"} onClick={() => setTab("users")}>
             Users
           </button>
+        ) : null}
+        {isAdmin ? (
           <button className={tab === "app" ? "tab-button active" : "tab-button"} onClick={() => setTab("app")}>
             App settings
           </button>
+        ) : null}
+        {isAdmin ? (
           <button className={tab === "sso" ? "tab-button active" : "tab-button"} onClick={() => setTab("sso")}>
             SSO
           </button>
-        </div>
+        ) : null}
+      </div>
 
-        {tab === "users" ? <UsersTab /> : null}
-        {tab === "app" ? <AppSettingsTab /> : null}
-        {tab === "sso" ? <SsoSettingsTab /> : null}
+      <section className="panel page-stack">
+        {tab === "profile" ? <ProfileTab /> : null}
+        {isAdmin && tab === "users" ? <UsersTab /> : null}
+        {isAdmin && tab === "app" ? <AppSettingsTab /> : null}
+        {isAdmin && tab === "sso" ? <SsoSettingsTab /> : null}
       </section>
     </main>
+  );
+}
+
+function ProfileTab() {
+  const { user } = useApp();
+  const [form, setForm] = useState({
+    currentPassword: "",
+    newPassword: "",
+    confirmPassword: "",
+  });
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    setMessage("");
+    setError("");
+
+    if (!form.currentPassword || !form.newPassword || !form.confirmPassword) {
+      setError("Please fill in all password fields.");
+      return;
+    }
+
+    if (form.newPassword !== form.confirmPassword) {
+      setError("The new passwords do not match.");
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      await apiFetch("/api/auth/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          currentPassword: form.currentPassword,
+          newPassword: form.newPassword,
+        }),
+      });
+      setForm({
+        currentPassword: "",
+        newPassword: "",
+        confirmPassword: "",
+      });
+      setMessage("Password updated.");
+    } catch (submitError) {
+      setError(submitError.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <section className="page-stack">
+      <div className="section-head">
+        <div>
+          <h3>Profile</h3>
+        </div>
+      </div>
+
+      <div className="profile-summary-grid">
+        <label>
+          <span>First name</span>
+          <input value={user?.firstName || ""} readOnly />
+        </label>
+        <label>
+          <span>Last name</span>
+          <input value={user?.lastName || ""} readOnly />
+        </label>
+        <label>
+          <span>Email</span>
+          <input value={user?.email || ""} readOnly />
+        </label>
+        <label>
+          <span>Role</span>
+          <input value={user?.role || ""} readOnly />
+        </label>
+        <label>
+          <span>Status</span>
+          <input value={user?.status || ""} readOnly />
+        </label>
+      </div>
+
+      <form className="stack-form profile-password-form" onSubmit={handleSubmit}>
+        <div>
+          <h3>Change password</h3>
+        </div>
+
+        <label>
+          <span>Current password</span>
+          <input
+            type="password"
+            value={form.currentPassword}
+            onChange={(event) => setForm((current) => ({ ...current, currentPassword: event.target.value }))}
+            required
+          />
+        </label>
+
+        <div className="split-grid">
+          <label>
+            <span>New password</span>
+            <input
+              type="password"
+              value={form.newPassword}
+              onChange={(event) => setForm((current) => ({ ...current, newPassword: event.target.value }))}
+              required
+            />
+          </label>
+          <label>
+            <span>Confirm new password</span>
+            <input
+              type="password"
+              value={form.confirmPassword}
+              onChange={(event) => setForm((current) => ({ ...current, confirmPassword: event.target.value }))}
+              required
+            />
+          </label>
+        </div>
+
+        {error ? <p className="error-text">{error}</p> : null}
+        {message ? <p className="success-text">{message}</p> : null}
+
+        <div>
+          <button className="primary-button" type="submit" disabled={submitting}>
+            {submitting ? "Saving..." : "Save password"}
+          </button>
+        </div>
+      </form>
+    </section>
   );
 }
 
 function UsersTab() {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [isUserDialogOpen, setIsUserDialogOpen] = useState(false);
+  const [actionUser, setActionUser] = useState(null);
+  const [isResetPasswordOpen, setIsResetPasswordOpen] = useState(false);
+  const [resetPassword, setResetPassword] = useState("");
+  const [isRoleDialogOpen, setIsRoleDialogOpen] = useState(false);
+  const [nextRole, setNextRole] = useState("viewer");
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [selectedUserId, setSelectedUserId] = useState("");
   const [form, setForm] = useState({
     firstName: "",
@@ -1873,6 +2100,7 @@ function UsersTab() {
     status: "active",
   });
   const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   async function loadUsers() {
     setLoading(true);
@@ -1891,6 +2119,69 @@ function UsersTab() {
     loadUsers();
   }, []);
 
+  function resetForm() {
+    setSelectedUserId("");
+    setForm({
+      firstName: "",
+      lastName: "",
+      email: "",
+      password: "",
+      role: "viewer",
+      status: "active",
+    });
+    setError("");
+  }
+
+  function openCreateUserDialog() {
+    resetForm();
+    setIsUserDialogOpen(true);
+  }
+
+  function closeUserDialog() {
+    setIsUserDialogOpen(false);
+    resetForm();
+  }
+
+  function openActionMenu(user) {
+    setActionUser(user);
+    setError("");
+  }
+
+  function closeActionMenu() {
+    setActionUser(null);
+  }
+
+  function openResetPasswordDialog() {
+    setResetPassword("");
+    setIsResetPasswordOpen(true);
+    closeActionMenu();
+  }
+
+  function closeResetPasswordDialog() {
+    setIsResetPasswordOpen(false);
+    setResetPassword("");
+  }
+
+  function openRoleDialog() {
+    setNextRole(actionUser?.role || "viewer");
+    setIsRoleDialogOpen(true);
+    closeActionMenu();
+  }
+
+  function closeRoleDialog() {
+    setIsRoleDialogOpen(false);
+    setNextRole("viewer");
+  }
+
+  function openDeleteDialog() {
+    setIsDeleteDialogOpen(true);
+    closeActionMenu();
+  }
+
+  function closeDeleteDialog() {
+    setIsDeleteDialogOpen(false);
+  }
+
   function fillFromUser(user) {
     setSelectedUserId(user?.id || "");
     setForm({
@@ -1901,11 +2192,14 @@ function UsersTab() {
       role: user?.role || "viewer",
       status: user?.status || "active",
     });
+    setError("");
+    setIsUserDialogOpen(true);
   }
 
   async function handleSubmit(event) {
     event.preventDefault();
     setError("");
+    setSubmitting(true);
     try {
       if (selectedUserId) {
         await apiFetch(`/api/users/${selectedUserId}`, {
@@ -1920,121 +2214,388 @@ function UsersTab() {
           body: JSON.stringify(form),
         });
       }
-      fillFromUser(null);
+      closeUserDialog();
       await loadUsers();
     } catch (submitError) {
       setError(submitError.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleResetPassword() {
+    if (!actionUser) {
+      return;
+    }
+
+    setError("");
+    setSubmitting(true);
+    try {
+      await apiFetch(`/api/users/${actionUser.id}/reset-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: resetPassword }),
+      });
+      closeResetPasswordDialog();
+      await loadUsers();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleRoleChange() {
+    if (!actionUser) {
+      return;
+    }
+
+    setError("");
+    setSubmitting(true);
+    try {
+      await apiFetch(`/api/users/${actionUser.id}/role`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role: nextRole }),
+      });
+      closeRoleDialog();
+      await loadUsers();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleDeactivateUser() {
+    if (!actionUser) {
+      return;
+    }
+
+    setError("");
+    setSubmitting(true);
+    try {
+      await apiFetch(`/api/users/${actionUser.id}/deactivate`, {
+        method: "POST",
+      });
+      closeActionMenu();
+      await loadUsers();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleDeleteUser() {
+    if (!actionUser) {
+      return;
+    }
+
+    setError("");
+    setSubmitting(true);
+    try {
+      await apiFetch(`/api/users/${actionUser.id}`, {
+        method: "DELETE",
+      });
+      closeDeleteDialog();
+      setActionUser(null);
+      await loadUsers();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setSubmitting(false);
     }
   }
 
   return (
-    <div className="dashboard-grid">
-      <section className="panel page-stack">
+    <>
+      <section className="page-stack">
         <div className="section-head">
           <div>
             <p className="eyebrow">Directory</p>
             <h3>Users</h3>
           </div>
+          <button className="primary-button" type="button" onClick={openCreateUserDialog}>
+            <span className="button-icon" aria-hidden="true">
+              ＋
+            </span>
+            Add user
+          </button>
         </div>
         {loading ? <p>Loading users…</p> : null}
         {error ? <p className="error-text">{error}</p> : null}
-        <div className="version-list">
-          {users.map((user) => (
-            <button className="user-row" type="button" key={user.id} onClick={() => fillFromUser(user)}>
-              <strong>
-                {user.firstName} {user.lastName}
-              </strong>
-              <span className="muted">
-                {user.email} · {user.role} · {user.status}
-              </span>
-            </button>
-          ))}
+        <div className="users-table-wrap">
+          <table className="users-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Role</th>
+                <th>Status</th>
+                <th className="actions-cell">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {users.map((user) => (
+                <tr key={user.id}>
+                  <td>
+                    {user.firstName} {user.lastName}
+                  </td>
+                  <td>{user.email}</td>
+                  <td>{user.role}</td>
+                  <td>{user.status}</td>
+                  <td className="actions-cell">
+                    <button
+                      className="icon-button table-action-button"
+                      type="button"
+                      aria-label={`Open actions for ${user.firstName} ${user.lastName}`}
+                      onClick={() => openActionMenu(user)}
+                    >
+                      ⋯
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </section>
 
-      <form className="panel stack-form" onSubmit={handleSubmit}>
-        <div className="section-head">
-          <div>
-            <p className="eyebrow">{selectedUserId ? "Update" : "Create"}</p>
-            <h3>{selectedUserId ? "Edit user" : "Add user"}</h3>
+      {isUserDialogOpen ? (
+        <div className="dialog-backdrop">
+          <div className="dialog panel dialog-compact" onClick={(event) => event.stopPropagation()}>
+            <div className="dialog-header">
+              <div>
+                <h2>{selectedUserId ? "Edit user" : "Add user"}</h2>
+              </div>
+              <button className="dialog-close" type="button" aria-label="Close dialog" onClick={closeUserDialog}>
+                ×
+              </button>
+            </div>
+
+            <form className="stack-form" onSubmit={handleSubmit}>
+              <div className="split-grid">
+                <label>
+                  <span>First name</span>
+                  <input
+                    value={form.firstName}
+                    onChange={(event) => setForm((current) => ({ ...current, firstName: event.target.value }))}
+                    required
+                  />
+                </label>
+                <label>
+                  <span>Last name</span>
+                  <input
+                    value={form.lastName}
+                    onChange={(event) => setForm((current) => ({ ...current, lastName: event.target.value }))}
+                    required
+                  />
+                </label>
+              </div>
+
+              <label>
+                <span>Email</span>
+                <input
+                  type="email"
+                  value={form.email}
+                  onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))}
+                  required
+                />
+              </label>
+
+              <label>
+                <span>Password {selectedUserId ? "(leave empty to keep)" : ""}</span>
+                <input
+                  type="password"
+                  value={form.password}
+                  onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))}
+                  required={!selectedUserId}
+                />
+              </label>
+
+              <div className="split-grid">
+                <label>
+                  <span>Role</span>
+                  <select
+                    value={form.role}
+                    onChange={(event) => setForm((current) => ({ ...current, role: event.target.value }))}
+                  >
+                    <option value="admin">admin</option>
+                    <option value="editor">editor</option>
+                    <option value="viewer">viewer</option>
+                  </select>
+                </label>
+
+                <label>
+                  <span>Status</span>
+                  <select
+                    value={form.status}
+                    onChange={(event) => setForm((current) => ({ ...current, status: event.target.value }))}
+                  >
+                    <option value="active">active</option>
+                    <option value="invited">invited</option>
+                    <option value="disabled">disabled</option>
+                  </select>
+                </label>
+              </div>
+
+              {error ? <p className="error-text">{error}</p> : null}
+
+              <div className="dialog-actions">
+                <button className="secondary-button" type="button" onClick={closeUserDialog}>
+                  Cancel
+                </button>
+                <button className="primary-button" type="submit" disabled={submitting}>
+                  {submitting ? (selectedUserId ? "Saving..." : "Creating...") : selectedUserId ? "Save user" : "Create user"}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
+      ) : null}
 
-        <div className="split-grid">
-          <label>
-            <span>First name</span>
-            <input
-              value={form.firstName}
-              onChange={(event) => setForm((current) => ({ ...current, firstName: event.target.value }))}
-              required
-            />
-          </label>
-          <label>
-            <span>Last name</span>
-            <input
-              value={form.lastName}
-              onChange={(event) => setForm((current) => ({ ...current, lastName: event.target.value }))}
-              required
-            />
-          </label>
+      {actionUser ? (
+        <div className="dialog-backdrop">
+          <div className="dialog panel dialog-compact" onClick={(event) => event.stopPropagation()}>
+            <div className="dialog-header">
+              <div>
+                <h2>
+                  {actionUser.firstName} {actionUser.lastName}
+                </h2>
+              </div>
+              <button className="dialog-close" type="button" aria-label="Close dialog" onClick={closeActionMenu}>
+                ×
+              </button>
+            </div>
+
+            <div className="dialog-actions dialog-actions-stacked">
+              <button className="secondary-button" type="button" onClick={() => fillFromUser(actionUser)}>
+                Edit
+              </button>
+              <button className="secondary-button" type="button" onClick={openResetPasswordDialog}>
+                Reset pw
+              </button>
+              <button className="secondary-button" type="button" onClick={openRoleDialog}>
+                Change role
+              </button>
+              <button className="secondary-button" type="button" onClick={handleDeactivateUser} disabled={submitting}>
+                Deactivate
+              </button>
+              <button className="danger-button" type="button" onClick={openDeleteDialog}>
+                Delete
+              </button>
+            </div>
+          </div>
         </div>
+      ) : null}
 
-        <label>
-          <span>Email</span>
-          <input
-            type="email"
-            value={form.email}
-            onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))}
-            required
-          />
-        </label>
+      {isResetPasswordOpen ? (
+        <div className="dialog-backdrop">
+          <div className="dialog panel dialog-compact" onClick={(event) => event.stopPropagation()}>
+            <div className="dialog-header">
+              <div>
+                <h2>Reset password</h2>
+              </div>
+              <button className="dialog-close" type="button" aria-label="Close dialog" onClick={closeResetPasswordDialog}>
+                ×
+              </button>
+            </div>
 
-        <label>
-          <span>Password {selectedUserId ? "(leave empty to keep)" : ""}</span>
-          <input
-            type="password"
-            value={form.password}
-            onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))}
-            required={!selectedUserId}
-          />
-        </label>
+            <div className="stack-form">
+              <label>
+                <span>New password</span>
+                <input
+                  type="password"
+                  value={resetPassword}
+                  onChange={(event) => setResetPassword(event.target.value)}
+                />
+              </label>
 
-        <div className="split-grid">
-          <label>
-            <span>Role</span>
-            <select
-              value={form.role}
-              onChange={(event) => setForm((current) => ({ ...current, role: event.target.value }))}
-            >
-              <option value="admin">admin</option>
-              <option value="editor">editor</option>
-              <option value="viewer">viewer</option>
-            </select>
-          </label>
+              {error ? <p className="error-text">{error}</p> : null}
 
-          <label>
-            <span>Status</span>
-            <select
-              value={form.status}
-              onChange={(event) => setForm((current) => ({ ...current, status: event.target.value }))}
-            >
-              <option value="active">active</option>
-              <option value="invited">invited</option>
-              <option value="disabled">disabled</option>
-            </select>
-          </label>
+              <div className="dialog-actions">
+                <button className="secondary-button" type="button" onClick={closeResetPasswordDialog}>
+                  Cancel
+                </button>
+                <button className="primary-button" type="button" disabled={!resetPassword || submitting} onClick={handleResetPassword}>
+                  {submitting ? "Saving..." : "Save password"}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
+      ) : null}
 
-        <div className="card-actions">
-          <button className="ghost-button" type="button" onClick={() => fillFromUser(null)}>
-            Clear
-          </button>
-          <button className="primary-button" type="submit">
-            {selectedUserId ? "Save user" : "Create user"}
-          </button>
+      {isRoleDialogOpen ? (
+        <div className="dialog-backdrop">
+          <div className="dialog panel dialog-compact" onClick={(event) => event.stopPropagation()}>
+            <div className="dialog-header">
+              <div>
+                <h2>Change role</h2>
+              </div>
+              <button className="dialog-close" type="button" aria-label="Close dialog" onClick={closeRoleDialog}>
+                ×
+              </button>
+            </div>
+
+            <div className="stack-form">
+              <label>
+                <span>Role</span>
+                <select value={nextRole} onChange={(event) => setNextRole(event.target.value)}>
+                  <option value="admin">admin</option>
+                  <option value="editor">editor</option>
+                  <option value="viewer">viewer</option>
+                </select>
+              </label>
+
+              {error ? <p className="error-text">{error}</p> : null}
+
+              <div className="dialog-actions">
+                <button className="secondary-button" type="button" onClick={closeRoleDialog}>
+                  Cancel
+                </button>
+                <button className="primary-button" type="button" disabled={submitting} onClick={handleRoleChange}>
+                  {submitting ? "Saving..." : "Save role"}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
-      </form>
-    </div>
+      ) : null}
+
+      {isDeleteDialogOpen ? (
+        <div className="dialog-backdrop">
+          <div className="dialog panel dialog-compact" onClick={(event) => event.stopPropagation()}>
+            <div className="dialog-header">
+              <div>
+                <h2>Delete user</h2>
+              </div>
+              <button className="dialog-close" type="button" aria-label="Close dialog" onClick={closeDeleteDialog}>
+                ×
+              </button>
+            </div>
+
+            <div className="dialog-copy">
+              <p className="muted">
+                Delete <strong>{actionUser?.firstName} {actionUser?.lastName}</strong>? This cannot be undone.
+              </p>
+            </div>
+
+            {error ? <p className="error-text">{error}</p> : null}
+
+            <div className="dialog-actions">
+              <button className="secondary-button" type="button" onClick={closeDeleteDialog}>
+                Cancel
+              </button>
+              <button className="danger-button" type="button" disabled={submitting} onClick={handleDeleteUser}>
+                {submitting ? "Deleting..." : "Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -2117,12 +2678,41 @@ function SsoSettingsTab() {
     issuerUrl: "",
     clientId: "",
     clientSecret: "",
+    passwordLoginEnabled: true,
+    autoProvisionEnabled: false,
+    autoProvisionRoleMode: "default_role",
+    autoProvisionDefaultRole: "viewer",
+    roleSyncMode: "first_login",
+    roleMappings: {
+      admin: "",
+      editor: "",
+      viewer: "",
+    },
   });
   const [message, setMessage] = useState("");
 
   useEffect(() => {
     apiFetch("/api/settings/sso").then((payload) => {
-      setForm(payload);
+      setForm({
+        enabled: Boolean(payload.enabled),
+        provider: payload.provider || "",
+        issuerUrl: payload.issuerUrl || "",
+        clientId: payload.clientId || "",
+        clientSecret: payload.clientSecret || "",
+        passwordLoginEnabled: payload.passwordLoginEnabled !== false,
+        autoProvisionEnabled: Boolean(payload.autoProvisionEnabled),
+        autoProvisionRoleMode:
+          payload.autoProvisionRoleMode === "identity_mapping" ? "identity_mapping" : "default_role",
+        autoProvisionDefaultRole: ["admin", "editor", "viewer"].includes(payload.autoProvisionDefaultRole)
+          ? payload.autoProvisionDefaultRole
+          : "viewer",
+        roleSyncMode: payload.roleSyncMode === "each_login" ? "each_login" : "first_login",
+        roleMappings: {
+          admin: payload.roleMappings?.admin || "",
+          editor: payload.roleMappings?.editor || "",
+          viewer: payload.roleMappings?.viewer || "",
+        },
+      });
     });
   }, []);
 
@@ -2145,6 +2735,28 @@ function SsoSettingsTab() {
           onChange={(event) => setForm((current) => ({ ...current, enabled: event.target.checked }))}
         />
         <span>Enable SSO configuration</span>
+      </label>
+
+      <label className="toggle-row">
+        <input
+          type="checkbox"
+          checked={form.passwordLoginEnabled}
+          onChange={(event) =>
+            setForm((current) => ({ ...current, passwordLoginEnabled: event.target.checked }))
+          }
+        />
+        <span>Allow login with email and password</span>
+      </label>
+
+      <label className="toggle-row">
+        <input
+          type="checkbox"
+          checked={form.autoProvisionEnabled}
+          onChange={(event) =>
+            setForm((current) => ({ ...current, autoProvisionEnabled: event.target.checked }))
+          }
+        />
+        <span>Auto provision new users on first login</span>
       </label>
 
       <label>
@@ -2183,9 +2795,120 @@ function SsoSettingsTab() {
         </label>
       </div>
 
-      <p className="muted">
-        Improvement idea: when we add SSO, we should map identity groups to the admin/editor/viewer roles here.
-      </p>
+      {form.autoProvisionEnabled ? (
+        <>
+          <label>
+            <span>Provisioning role assignment</span>
+            <select
+              value={form.autoProvisionRoleMode}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  autoProvisionRoleMode: event.target.value === "identity_mapping" ? "identity_mapping" : "default_role",
+                }))
+              }
+            >
+              <option value="default_role">Default user role</option>
+              <option value="identity_mapping">Identity group mapping</option>
+            </select>
+          </label>
+
+          {form.autoProvisionRoleMode === "default_role" ? (
+            <label>
+              <span>Default role for new users</span>
+              <select
+                value={form.autoProvisionDefaultRole}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    autoProvisionDefaultRole: ["admin", "editor", "viewer"].includes(event.target.value)
+                      ? event.target.value
+                      : "viewer",
+                  }))
+                }
+              >
+                <option value="admin">Admin</option>
+                <option value="editor">Editor</option>
+                <option value="viewer">Viewer</option>
+              </select>
+            </label>
+          ) : (
+            <>
+              <label>
+                <span>Role sync timing</span>
+                <select
+                  value={form.roleSyncMode}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      roleSyncMode: event.target.value === "each_login" ? "each_login" : "first_login",
+                    }))
+                  }
+                >
+                  <option value="first_login">Only on first login</option>
+                  <option value="each_login">On each login</option>
+                </select>
+              </label>
+
+              <p className="helper-text">
+                New users will receive their role from the identity group mappings below.
+              </p>
+              <div className="split-grid">
+                <label>
+                  <span>Admin group</span>
+                  <input
+                    value={form.roleMappings.admin}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        roleMappings: {
+                          ...current.roleMappings,
+                          admin: event.target.value,
+                        },
+                      }))
+                    }
+                    placeholder="localize-admins"
+                  />
+                </label>
+
+                <label>
+                  <span>Editor group</span>
+                  <input
+                    value={form.roleMappings.editor}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        roleMappings: {
+                          ...current.roleMappings,
+                          editor: event.target.value,
+                        },
+                      }))
+                    }
+                    placeholder="localize-editors"
+                  />
+                </label>
+              </div>
+
+              <label>
+                <span>Viewer group</span>
+                <input
+                  value={form.roleMappings.viewer}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      roleMappings: {
+                        ...current.roleMappings,
+                        viewer: event.target.value,
+                      },
+                    }))
+                  }
+                  placeholder="localize-viewers"
+                />
+              </label>
+            </>
+          )}
+        </>
+      ) : null}
 
       {message ? <p className="success-text">{message}</p> : null}
 
@@ -2202,6 +2925,7 @@ const router = createBrowserRouter(
       <Route element={<PublicOnly />}>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
+        <Route path="/sso-status" element={<SsoStatusPage />} />
       </Route>
 
       <Route element={<RequireAuth />}>
@@ -2209,9 +2933,7 @@ const router = createBrowserRouter(
           <Route path="/" element={<DashboardPage />} />
           <Route path="/projects/:projectId" element={<ProjectPage />} />
           <Route path="/projects/:projectId/languages/:languageCode/edit" element={<EditorPage />} />
-          <Route element={<RequireRole role="admin" />}>
-            <Route path="/settings" element={<SettingsPage />} />
-          </Route>
+          <Route path="/settings" element={<SettingsPage />} />
         </Route>
       </Route>
 

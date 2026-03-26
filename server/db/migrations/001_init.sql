@@ -25,6 +25,14 @@ CREATE TABLE IF NOT EXISTS app_settings (
   sso_issuer_url TEXT NOT NULL DEFAULT '',
   sso_client_id TEXT NOT NULL DEFAULT '',
   sso_client_secret TEXT NOT NULL DEFAULT '',
+  sso_password_login_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  sso_auto_provision_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  sso_auto_provision_role_mode TEXT NOT NULL DEFAULT 'default_role' CHECK (sso_auto_provision_role_mode IN ('default_role', 'identity_mapping')),
+  sso_auto_provision_default_role TEXT NOT NULL DEFAULT 'viewer' CHECK (sso_auto_provision_default_role IN ('admin', 'editor', 'viewer')),
+  sso_role_sync_mode TEXT NOT NULL DEFAULT 'first_login' CHECK (sso_role_sync_mode IN ('first_login', 'each_login')),
+  sso_admin_group TEXT NOT NULL DEFAULT '',
+  sso_editor_group TEXT NOT NULL DEFAULT '',
+  sso_viewer_group TEXT NOT NULL DEFAULT '',
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
