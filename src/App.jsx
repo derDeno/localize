@@ -1,6 +1,7 @@
 import { createContext, useContext, useDeferredValue, useEffect, useMemo, useState } from "react";
 import {
   Link,
+  NavLink,
   Navigate,
   Outlet,
   Route,
@@ -8,6 +9,7 @@ import {
   createBrowserRouter,
   createRoutesFromElements,
   useNavigate,
+  useOutletContext,
   useParams,
 } from "react-router-dom";
 
@@ -43,6 +45,16 @@ const languageMeta = {
   zh: { countryCode: "cn", name: "Chinese" },
 };
 
+const initialProjectForm = {
+  name: "",
+  description: "",
+  version: "1.0.0",
+  sourceLanguage: "en",
+  sourceLabel: "English",
+  sourceMode: "upload",
+  sourceLibraryFile: "",
+};
+
 const AppContext = createContext(null);
 
 async function apiFetch(url, options = {}) {
@@ -72,6 +84,40 @@ function languageDisplay(code, fallbackLabel) {
 
 function progressLabel(progress) {
   return `${progress.percent}% · ${progress.completed}/${progress.total}`;
+}
+
+function getSystemTheme() {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return "light";
+  }
+
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function SunIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="switch-glyph">
+      <circle cx="12" cy="12" r="4.5" fill="currentColor" />
+      <path
+        d="M12 2.5v2.5M12 19v2.5M21.5 12H19M5 12H2.5M18.7 5.3l-1.8 1.8M7.1 16.9l-1.8 1.8M18.7 18.7l-1.8-1.8M7.1 7.1 5.3 5.3"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function MoonIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="switch-glyph">
+      <path
+        d="M14.8 3.2a8.7 8.7 0 1 0 6 14.8A9.8 9.8 0 0 1 14.8 3.2Z"
+        fill="currentColor"
+      />
+    </svg>
+  );
 }
 
 function Flag({ code, label }) {
@@ -190,6 +236,103 @@ function RequireRole({ role }) {
 function AppShell() {
   const navigate = useNavigate();
   const { user, settings, refreshBootstrap, setBootstrap } = useApp();
+  const [themePreference, setThemePreference] = useState(() => localStorage.getItem("localize-theme"));
+  const [systemTheme, setSystemTheme] = useState(getSystemTheme);
+  const [toast, setToast] = useState(null);
+  const [showBackToTop, setShowBackToTop] = useState(false);
+  const [refreshSeed, setRefreshSeed] = useState(0);
+  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [isProjectFileHovering, setIsProjectFileHovering] = useState(false);
+  const [projectForm, setProjectForm] = useState(initialProjectForm);
+  const [projectFile, setProjectFile] = useState(null);
+  const [libraryFiles, setLibraryFiles] = useState([]);
+  const [isCreatingProject, setIsCreatingProject] = useState(false);
+  const theme = themePreference || systemTheme || "light";
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return undefined;
+    }
+
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleChange = (event) => {
+      setSystemTheme(event.matches ? "dark" : "light");
+    };
+
+    setSystemTheme(mediaQuery.matches ? "dark" : "light");
+    mediaQuery.addEventListener("change", handleChange);
+
+    return () => mediaQuery.removeEventListener("change", handleChange);
+  }, []);
+
+  useEffect(() => {
+    if (!toast) {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setToast(null);
+    }, 4000);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [toast]);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      setShowBackToTop(window.scrollY > 320);
+    };
+
+    handleScroll();
+    window.addEventListener("scroll", handleScroll, { passive: true });
+
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
+
+  useEffect(() => {
+    if (!isCreateDialogOpen) {
+      return;
+    }
+
+    apiFetch("/api/library")
+      .then((payload) => setLibraryFiles(payload))
+      .catch(() => setLibraryFiles([]));
+  }, [isCreateDialogOpen]);
+
+  function showToast(kind, text) {
+    setToast({
+      id: `${Date.now()}-${Math.random()}`,
+      kind,
+      text,
+    });
+  }
+
+  function resetProjectDialog() {
+    setProjectForm(initialProjectForm);
+    setProjectFile(null);
+    setIsProjectFileHovering(false);
+  }
+
+  function openCreateDialog() {
+    resetProjectDialog();
+    setIsCreateDialogOpen(true);
+  }
+
+  function closeCreateDialog() {
+    setIsCreateDialogOpen(false);
+    resetProjectDialog();
+  }
+
+  function handleProjectFileSelection(file) {
+    if (!file) {
+      return;
+    }
+
+    setProjectFile(file);
+  }
 
   async function handleLogout() {
     await apiFetch("/api/auth/logout", { method: "POST" });
@@ -200,61 +343,299 @@ function AppShell() {
     navigate("/login");
   }
 
+  async function handleCreateProject(event) {
+    event.preventDefault();
+
+    if (projectForm.sourceMode === "upload" && !projectFile) {
+      showToast("error", "Please select a source file.");
+      return;
+    }
+
+    setIsCreatingProject(true);
+
+    try {
+      const formData = new FormData();
+      formData.set("name", projectForm.name);
+      formData.set("description", projectForm.description);
+      formData.set("version", projectForm.version);
+      formData.set("sourceLanguage", projectForm.sourceLanguage.trim().toLowerCase());
+      formData.set(
+        "sourceLabel",
+        projectForm.sourceLabel.trim() || languageDisplay(projectForm.sourceLanguage).label,
+      );
+      formData.set("sourceMode", projectForm.sourceMode);
+
+      if (projectForm.sourceMode === "library") {
+        formData.set("sourceLibraryFile", projectForm.sourceLibraryFile);
+      } else if (projectFile) {
+        formData.set("sourceFile", projectFile);
+        formData.set(
+          "sourceFileName",
+          projectFile.name || `${projectForm.name}-${projectForm.sourceLanguage}.json`,
+        );
+      }
+
+      const created = await apiFetch("/api/projects", {
+        method: "POST",
+        body: formData,
+      });
+
+      closeCreateDialog();
+      setRefreshSeed((current) => current + 1);
+      showToast("success", "Project created.");
+      navigate(`/projects/${created.id}`);
+    } catch (error) {
+      showToast("error", error.message);
+    } finally {
+      setIsCreatingProject(false);
+    }
+  }
+
   return (
     <div className="app-shell">
-      <header className="topbar panel">
-        <div className="brand-block">
-          <img className="brand-icon" src="/icon.svg" alt="" />
+      <header className="topbar">
+        <div className="brand">
+          <img src="/icon.svg" alt="localize icon" className="brand-icon" />
           <div>
-            <p className="eyebrow">Translation Workspace</p>
+            <p className="eyebrow">i18n workspace</p>
             <h1>localize</h1>
           </div>
         </div>
 
-        <nav className="topbar-menu">
-          <Link className="menu-link" to="/">
+        <nav className="topbar-menu" aria-label="Primary">
+          <NavLink className={({ isActive }) => `menu-link${isActive ? " active" : ""}`} to="/">
             Dashboard
-          </Link>
+          </NavLink>
           {roleAllows(user, "admin") ? (
-            <Link className="menu-link" to="/settings">
+            <NavLink className={({ isActive }) => `menu-link${isActive ? " active" : ""}`} to="/settings">
               Settings
-            </Link>
+            </NavLink>
           ) : null}
         </nav>
 
-        <div className="account-menu">
-          <div>
+        <div className="topbar-actions">
+          <div className="account-chip">
             <strong>
               {user.firstName} {user.lastName}
             </strong>
-            <p className="muted">
+            <span className="muted">
               {user.role} · {user.email}
-            </p>
+            </span>
           </div>
-          {roleAllows(user, "admin") ? (
-            <button className="ghost-button" type="button" onClick={() => navigate("/settings")}>
-              Settings
+
+          <label className="theme-switch">
+            <button
+              type="button"
+              className="switch"
+              aria-label="Toggle dark mode"
+              aria-pressed={theme === "dark"}
+              onClick={() => {
+                const nextTheme = theme === "dark" ? "light" : "dark";
+                setThemePreference(nextTheme);
+                localStorage.setItem("localize-theme", nextTheme);
+              }}
+            >
+              <span className="switch-icon switch-icon-sun" aria-hidden="true">
+                <SunIcon />
+              </span>
+              <span className="switch-thumb" />
+              <span className="switch-icon switch-icon-moon" aria-hidden="true">
+                <MoonIcon />
+              </span>
             </button>
-          ) : null}
+          </label>
+
           <button className="ghost-button" type="button" onClick={refreshBootstrap}>
             Refresh
           </button>
-          <button className="primary-button" type="button" onClick={handleLogout}>
+          <button className="secondary-button" type="button" onClick={handleLogout}>
             Sign out
           </button>
         </div>
       </header>
 
       {!settings ? null : (
-        <section className="panel status-banner">
-          <span>Registration: {settings.allowRegistration ? "enabled" : "disabled"}</span>
-          <span>Project delete: {settings.allowProjectDelete ? "enabled" : "disabled"}</span>
-          <span>Language delete: {settings.allowLanguageDelete ? "enabled" : "disabled"}</span>
-          <span>SSO: {settings.sso.enabled ? "configured" : "not configured"}</span>
+        <section className="status-banner">
+          <span className="pill">Registration: {settings.allowRegistration ? "on" : "off"}</span>
+          <span className="pill">Project delete: {settings.allowProjectDelete ? "on" : "off"}</span>
+          <span className="pill">Language delete: {settings.allowLanguageDelete ? "on" : "off"}</span>
+          <span className="pill">SSO: {settings.sso.enabled ? "configured" : "not configured"}</span>
         </section>
       )}
 
-      <Outlet />
+      {toast ? (
+        <div className={`toast ${toast.kind}`} key={toast.id} role="status" aria-live="polite">
+          {toast.text}
+        </div>
+      ) : null}
+
+      {showBackToTop ? (
+        <button
+          className="back-to-top"
+          type="button"
+          aria-label="Back to top"
+          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+        >
+          ‹
+        </button>
+      ) : null}
+
+      <main className="page-shell">
+        <Outlet context={{ refreshSeed, openCreateDialog, showToast }} />
+      </main>
+
+      {isCreateDialogOpen ? (
+        <div className="dialog-backdrop" onClick={closeCreateDialog}>
+          <div className="dialog panel" onClick={(event) => event.stopPropagation()}>
+            <div className="dialog-header">
+              <div>
+                <h2>Create project</h2>
+              </div>
+              <button
+                className="ghost-button dialog-close"
+                type="button"
+                aria-label="Close dialog"
+                onClick={closeCreateDialog}
+              >
+                ×
+              </button>
+            </div>
+
+            <form className="stack-form" onSubmit={handleCreateProject}>
+              <label>
+                <span>Name</span>
+                <input
+                  required
+                  value={projectForm.name}
+                  onChange={(event) =>
+                    setProjectForm((current) => ({ ...current, name: event.target.value }))
+                  }
+                />
+              </label>
+
+              <label>
+                <span>Description</span>
+                <textarea
+                  rows="4"
+                  value={projectForm.description}
+                  onChange={(event) =>
+                    setProjectForm((current) => ({ ...current, description: event.target.value }))
+                  }
+                />
+              </label>
+
+              <label>
+                <span>Version</span>
+                <input
+                  value={projectForm.version}
+                  onChange={(event) =>
+                    setProjectForm((current) => ({ ...current, version: event.target.value }))
+                  }
+                />
+              </label>
+
+              <div className="split-grid">
+                <label>
+                  <span>Source language code</span>
+                  <input
+                    required
+                    value={projectForm.sourceLanguage}
+                    onChange={(event) =>
+                      setProjectForm((current) => ({
+                        ...current,
+                        sourceLanguage: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+
+                <label>
+                  <span>Source label</span>
+                  <input
+                    required
+                    value={projectForm.sourceLabel}
+                    onChange={(event) =>
+                      setProjectForm((current) => ({ ...current, sourceLabel: event.target.value }))
+                    }
+                  />
+                </label>
+              </div>
+
+              <label>
+                <span>Source mode</span>
+                <select
+                  value={projectForm.sourceMode}
+                  onChange={(event) =>
+                    setProjectForm((current) => ({
+                      ...current,
+                      sourceMode: event.target.value,
+                      sourceLibraryFile: "",
+                    }))
+                  }
+                >
+                  <option value="upload">Upload</option>
+                  <option value="library">Library</option>
+                </select>
+              </label>
+
+              {projectForm.sourceMode === "library" ? (
+                <label>
+                  <span>Library file</span>
+                  <select
+                    value={projectForm.sourceLibraryFile}
+                    onChange={(event) =>
+                      setProjectForm((current) => ({
+                        ...current,
+                        sourceLibraryFile: event.target.value,
+                      }))
+                    }
+                    required
+                  >
+                    <option value="">Select a JSON file</option>
+                    {libraryFiles.map((file) => (
+                      <option key={file.fileName} value={file.fileName}>
+                        {file.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : (
+                <label>
+                  <span>Source file</span>
+                  <div
+                    className={`dropzone ${isProjectFileHovering ? "hover" : ""}`}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      setIsProjectFileHovering(true);
+                    }}
+                    onDragLeave={() => setIsProjectFileHovering(false)}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      setIsProjectFileHovering(false);
+                      handleProjectFileSelection(event.dataTransfer.files?.[0] || null);
+                    }}
+                  >
+                    <input
+                      id="project-source-file"
+                      type="file"
+                      accept=".json,application/json"
+                      onChange={(event) => handleProjectFileSelection(event.target.files?.[0] || null)}
+                    />
+                    <label htmlFor="project-source-file" className="dropzone-content">
+                      <strong>{projectFile ? projectFile.name : "Drop JSON file here"}</strong>
+                      <span>{projectFile ? "Click to replace it." : "or click to browse your files."}</span>
+                    </label>
+                  </div>
+                </label>
+              )}
+
+              <button className="primary-button" disabled={isCreatingProject} type="submit">
+                {isCreatingProject ? "Creating..." : "Create"}
+              </button>
+            </form>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -450,33 +831,17 @@ function RegisterPage() {
 
 function DashboardPage() {
   const { user } = useApp();
+  const { refreshSeed, openCreateDialog } = useOutletContext();
   const [projects, setProjects] = useState([]);
-  const [libraryFiles, setLibraryFiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState("");
-  const [form, setForm] = useState({
-    name: "",
-    description: "",
-    version: "1.0.0",
-    sourceLanguage: "en",
-    sourceLabel: "English",
-    sourceMode: "upload",
-    sourceLibraryFile: "",
-    sourceFile: null,
-  });
 
   async function loadData() {
     setLoading(true);
     setError("");
     try {
-      const [projectList, libraryList] = await Promise.all([
-        apiFetch("/api/projects"),
-        apiFetch("/api/library"),
-      ]);
+      const projectList = await apiFetch("/api/projects");
       setProjects(projectList);
-      setLibraryFiles(libraryList);
     } catch (loadError) {
       setError(loadError.message);
     } finally {
@@ -486,212 +851,67 @@ function DashboardPage() {
 
   useEffect(() => {
     loadData();
-  }, []);
-
-  async function handleCreateProject(event) {
-    event.preventDefault();
-    setCreating(true);
-    setCreateError("");
-
-    try {
-      const body = new FormData();
-      body.append("name", form.name);
-      body.append("description", form.description);
-      body.append("version", form.version);
-      body.append("sourceLanguage", form.sourceLanguage);
-      body.append("sourceLabel", form.sourceLabel);
-      body.append("sourceMode", form.sourceMode);
-      if (form.sourceMode === "library") {
-        body.append("sourceLibraryFile", form.sourceLibraryFile);
-      } else if (form.sourceFile) {
-        body.append("sourceFile", form.sourceFile);
-        body.append("sourceFileName", form.sourceFile.name);
-      }
-
-      await apiFetch("/api/projects", {
-        method: "POST",
-        body,
-      });
-
-      setForm({
-        name: "",
-        description: "",
-        version: "1.0.0",
-        sourceLanguage: "en",
-        sourceLabel: "English",
-        sourceMode: "upload",
-        sourceLibraryFile: "",
-        sourceFile: null,
-      });
-      await loadData();
-    } catch (submitError) {
-      setCreateError(submitError.message);
-    } finally {
-      setCreating(false);
-    }
-  }
+  }, [refreshSeed]);
 
   return (
-    <main className="page-stack">
-      <section className="panel page-hero">
+    <div className="page-stack">
+      <section className="page-hero panel">
         <div>
-          <p className="eyebrow">Workspace</p>
+          <p className="eyebrow">Dashboard</p>
           <h2>Projects</h2>
-          <p className="muted">Manage project configs, translation languages, and downloadable JSON exports.</p>
+          <p className="muted">Open a project card to manage languages and translations.</p>
         </div>
-        <div className="hero-metrics">
-          <strong>{projects.length}</strong>
-          <span className="muted">active projects</span>
-        </div>
+        {roleAllows(user, "editor") ? (
+          <button className="primary-button" type="button" onClick={openCreateDialog}>
+            <span className="button-icon" aria-hidden="true">
+              ＋
+            </span>
+            Create project
+          </button>
+        ) : null}
       </section>
 
       {error ? <section className="panel error-text">{error}</section> : null}
 
-      {roleAllows(user, "editor") ? (
-        <section className="panel page-stack">
-          <div className="section-head">
-            <div>
-              <p className="eyebrow">Create</p>
-              <h3>New project</h3>
-            </div>
-          </div>
-
-          <form className="stack-form" onSubmit={handleCreateProject}>
-            <div className="split-grid">
-              <label>
-                <span>Name</span>
-                <input
-                  value={form.name}
-                  onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
-                  required
-                />
-              </label>
-
-              <label>
-                <span>Version</span>
-                <input
-                  value={form.version}
-                  onChange={(event) => setForm((current) => ({ ...current, version: event.target.value }))}
-                />
-              </label>
-            </div>
-
-            <label>
-              <span>Description</span>
-              <textarea
-                value={form.description}
-                onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
-                rows={3}
-              />
-            </label>
-
-            <div className="split-grid">
-              <label>
-                <span>Source language code</span>
-                <input
-                  value={form.sourceLanguage}
-                  onChange={(event) => setForm((current) => ({ ...current, sourceLanguage: event.target.value }))}
-                  required
-                />
-              </label>
-
-              <label>
-                <span>Source label</span>
-                <input
-                  value={form.sourceLabel}
-                  onChange={(event) => setForm((current) => ({ ...current, sourceLabel: event.target.value }))}
-                  required
-                />
-              </label>
-            </div>
-
-            <label>
-              <span>Source mode</span>
-              <select
-                value={form.sourceMode}
-                onChange={(event) => setForm((current) => ({ ...current, sourceMode: event.target.value }))}
-              >
-                <option value="upload">Upload</option>
-                <option value="library">Library</option>
-              </select>
-            </label>
-
-            {form.sourceMode === "library" ? (
-              <label>
-                <span>Library file</span>
-                <select
-                  value={form.sourceLibraryFile}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, sourceLibraryFile: event.target.value }))
-                  }
-                  required
-                >
-                  <option value="">Select a JSON file</option>
-                  {libraryFiles.map((file) => (
-                    <option key={file.fileName} value={file.fileName}>
-                      {file.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : (
-              <label>
-                <span>Source JSON file</span>
-                <input
-                  type="file"
-                  accept="application/json,.json"
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, sourceFile: event.target.files?.[0] || null }))
-                  }
-                  required
-                />
-              </label>
-            )}
-
-            {createError ? <p className="error-text">{createError}</p> : null}
-
-            <button className="primary-button" type="submit" disabled={creating}>
-              {creating ? "Creating project…" : "Create project"}
-            </button>
-          </form>
+      {loading ? (
+        <section className="panel empty-state">
+          <h3>Loading projects...</h3>
         </section>
-      ) : null}
-
-      <section className="cards-grid">
-        {loading ? (
-          <div className="panel">Loading projects…</div>
-        ) : projects.length ? (
-          projects.map((project) => (
-            <article className="panel project-card" key={project.id}>
+      ) : projects.length === 0 ? (
+        <section className="panel empty-state">
+          <h3>No projects yet</h3>
+          <p className="muted">Create your first project to start translating JSON files.</p>
+        </section>
+      ) : (
+        <section className="dashboard-grid">
+          {projects.map((project) => (
+            <article className="project-card panel" key={project.id}>
               <div className="card-top">
-                <div>
-                  <p className="eyebrow">{project.version || "No version"}</p>
-                  <strong>{project.name}</strong>
+                <strong>{project.name}</strong>
+                <div className="card-badges">
+                  {project.version ? <span className="pill">v{project.version}</span> : null}
+                  <span className="pill">{project.sourceLanguage.toUpperCase()}</span>
                 </div>
-                <span className="badge">rev {project.currentRevision}</span>
               </div>
-              <p className="muted">{project.description || "No description yet."}</p>
+              {project.description ? <p className="muted">{project.description}</p> : null}
+              <p className="muted">{project.languages.length} languages</p>
               <div className="mini-flags">
-                {project.languages.map((language) => (
-                  <span className="lang-pill" key={language.id}>
+                {project.languages.slice(0, 5).map((language) => (
+                  <span key={language.code} title={language.label}>
                     <Flag code={language.code} label={language.label} />
-                    {language.label}
                   </span>
                 ))}
               </div>
-              <div className="card-actions">
-                <span className="muted">{project.languages.length} languages</span>
-                <Link className="primary-button link-button" to={`/projects/${project.id}`}>
-                  Open
+              <div className="project-card-actions">
+                <Link className="primary-button" to={`/projects/${project.id}`}>
+                  Open project
                 </Link>
               </div>
             </article>
-          ))
-        ) : (
-          <div className="panel">No projects yet.</div>
-        )}
-      </section>
-    </main>
+          ))}
+        </section>
+      )}
+    </div>
   );
 }
 
