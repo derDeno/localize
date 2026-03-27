@@ -12,6 +12,7 @@ const {
   DIST_DIR,
   LIBRARY_DIR,
   PORT,
+  PUBLIC_APP_URL,
   PROJECTS_DIR,
   SESSION_COOKIE_SECURE,
   SESSION_SECRET,
@@ -20,12 +21,14 @@ const {
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
 const SESSION_COOKIE = "localize_session";
+const SSO_TRANSACTION_COOKIE = "localize_sso_transaction";
 const roleRank = {
   viewer: 1,
   editor: 2,
   admin: 3,
 };
 
+app.set("trust proxy", true);
 app.use(express.json({ limit: "10mb" }));
 app.use(cookieParser());
 
@@ -153,13 +156,13 @@ async function ensureDirs() {
   await fs.mkdir(LIBRARY_DIR, { recursive: true });
 }
 
-function signSession(payload) {
+function signToken(payload) {
   const body = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
   const signature = crypto.createHmac("sha256", SESSION_SECRET).update(body).digest("base64url");
   return `${body}.${signature}`;
 }
 
-function verifySession(token) {
+function verifyToken(token) {
   if (!token || !token.includes(".")) {
     return null;
   }
@@ -177,13 +180,25 @@ function verifySession(token) {
 
   try {
     const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
-    if (!payload?.sub || !payload?.exp || payload.exp < Date.now()) {
+    if (!payload?.exp || payload.exp < Date.now()) {
       return null;
     }
     return payload;
   } catch (_error) {
     return null;
   }
+}
+
+function signSession(payload) {
+  return signToken(payload);
+}
+
+function verifySession(token) {
+  const payload = verifyToken(token);
+  if (!payload?.sub) {
+    return null;
+  }
+  return payload;
 }
 
 function hashPassword(password) {
@@ -217,6 +232,165 @@ function verifyPassword(password, storedHash) {
       resolve(crypto.timingSafeEqual(Buffer.from(hash, "hex"), derivedKey));
     });
   });
+}
+
+function getRequestBaseUrl(req) {
+  if (PUBLIC_APP_URL) {
+    return PUBLIC_APP_URL;
+  }
+
+  const forwardedProto = String(req.get("x-forwarded-proto") || "").split(",")[0].trim();
+  const forwardedHost = String(req.get("x-forwarded-host") || "").split(",")[0].trim();
+  const protocol = forwardedProto || req.protocol || "http";
+  const host = forwardedHost || req.get("host");
+
+  if (!host) {
+    throw createError("Unable to determine the application URL for SSO.", 500);
+  }
+
+  return `${protocol}://${host}`;
+}
+
+function getSsoCallbackUrl(req) {
+  return `${getRequestBaseUrl(req)}/api/auth/sso/callback`;
+}
+
+function normalizeReturnTo(value) {
+  const fallback = "/";
+  const candidate = String(value || "").trim();
+
+  if (!candidate.startsWith("/") || candidate.startsWith("//")) {
+    return fallback;
+  }
+
+  return candidate;
+}
+
+function splitClaimValues(value) {
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => splitClaimValues(item));
+  }
+
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  return [];
+}
+
+function getIdentityGroups(claims) {
+  const groups = new Set();
+  ["groups", "roles", "group", "memberOf"].forEach((key) => {
+    splitClaimValues(claims?.[key]).forEach((value) => groups.add(value));
+  });
+  return Array.from(groups);
+}
+
+function getIdentityRole(settings, claims) {
+  const groups = new Set(getIdentityGroups(claims));
+  const mappings = settings.sso.roleMappings || {};
+
+  if (mappings.admin && groups.has(mappings.admin)) {
+    return "admin";
+  }
+
+  if (mappings.editor && groups.has(mappings.editor)) {
+    return "editor";
+  }
+
+  if (mappings.viewer && groups.has(mappings.viewer)) {
+    return "viewer";
+  }
+
+  return null;
+}
+
+function getUserNamesFromClaims(claims) {
+  const firstName = String(claims?.given_name || "").trim();
+  const lastName = String(claims?.family_name || "").trim();
+
+  if (firstName || lastName) {
+    return {
+      firstName: firstName || "SSO",
+      lastName: lastName || "User",
+    };
+  }
+
+  const fullName = String(claims?.name || "").trim();
+  if (fullName) {
+    const parts = fullName.split(/\s+/).filter(Boolean);
+    return {
+      firstName: parts[0] || "SSO",
+      lastName: parts.slice(1).join(" ") || "User",
+    };
+  }
+
+  const email = String(claims?.email || claims?.preferred_username || claims?.upn || "").trim();
+  if (email.includes("@")) {
+    return {
+      firstName: email.split("@")[0],
+      lastName: "User",
+    };
+  }
+
+  return {
+    firstName: "SSO",
+    lastName: "User",
+  };
+}
+
+function getSsoIdentity(claims) {
+  const issuer = String(claims?.iss || "").trim();
+  const subject = String(claims?.sub || "").trim();
+  const email = String(claims?.email || claims?.preferred_username || claims?.upn || "")
+    .trim()
+    .toLowerCase();
+
+  return {
+    issuer,
+    subject,
+    email,
+    groups: getIdentityGroups(claims),
+    ...getUserNamesFromClaims(claims),
+  };
+}
+
+function getSsoRoleForUser(settings, identity, isFirstLogin) {
+  if (settings.sso.autoProvisionRoleMode === "identity_mapping") {
+    const mappedRole = getIdentityRole(settings, { groups: identity.groups });
+    if (mappedRole) {
+      return mappedRole;
+    }
+
+    if (isFirstLogin) {
+      throw createError("No matching SSO group mapping was found for this account.", 403);
+    }
+  }
+
+  if (isFirstLogin) {
+    return settings.sso.autoProvisionDefaultRole;
+  }
+
+  return null;
+}
+
+function shouldSyncSsoRole(settings, isFirstLogin) {
+  if (settings.sso.autoProvisionRoleMode !== "identity_mapping") {
+    return false;
+  }
+
+  if (isFirstLogin) {
+    return true;
+  }
+
+  return settings.sso.roleSyncMode === "each_login";
+}
+
+function createRandomSecret() {
+  return crypto.randomBytes(32).toString("base64url");
 }
 
 function sanitizeUser(user) {
@@ -313,6 +487,7 @@ async function getAppSettings(client = pool) {
         sso_issuer_url,
         sso_client_id,
         sso_client_secret,
+        sso_scopes,
         sso_password_login_enabled,
         sso_auto_provision_enabled,
         sso_auto_provision_role_mode,
@@ -339,6 +514,7 @@ async function getAppSettings(client = pool) {
       issuerUrl: row?.sso_issuer_url || "",
       clientId: row?.sso_client_id || "",
       clientSecret: row?.sso_client_secret || "",
+      scopes: row?.sso_scopes || "openid profile email",
       passwordLoginEnabled: Boolean(row?.sso_password_login_enabled ?? true),
       autoProvisionEnabled: Boolean(row?.sso_auto_provision_enabled),
       autoProvisionRoleMode:
@@ -355,6 +531,221 @@ async function getAppSettings(client = pool) {
     },
     updatedAt: row?.updated_at || null,
   };
+}
+
+const oidcMetadataCache = new Map();
+
+async function getOidcMetadata(issuerUrl) {
+  const normalizedIssuer = String(issuerUrl || "").trim().replace(/\/+$/g, "");
+  if (!normalizedIssuer) {
+    throw createError("The SSO issuer URL is required.", 400);
+  }
+
+  const cached = oidcMetadataCache.get(normalizedIssuer);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.metadata;
+  }
+
+  const discoveryUrl = `${normalizedIssuer}/.well-known/openid-configuration`;
+  const response = await fetch(discoveryUrl);
+  if (!response.ok) {
+    throw createError("The SSO issuer discovery document could not be loaded.", 502);
+  }
+
+  const metadata = await response.json();
+  if (!metadata?.authorization_endpoint || !metadata?.token_endpoint || !metadata?.jwks_uri) {
+    throw createError("The SSO issuer metadata is missing required OpenID Connect endpoints.", 502);
+  }
+
+  oidcMetadataCache.set(normalizedIssuer, {
+    metadata,
+    expiresAt: Date.now() + 1000 * 60 * 10,
+  });
+
+  return metadata;
+}
+
+async function exchangeAuthorizationCode(metadata, params) {
+  const body = new URLSearchParams({
+    grant_type: "authorization_code",
+    code: params.code,
+    redirect_uri: params.redirectUri,
+    code_verifier: params.codeVerifier,
+    client_id: params.clientId,
+  });
+
+  const headers = {
+    Accept: "application/json",
+    "Content-Type": "application/x-www-form-urlencoded",
+  };
+
+  if (params.clientSecret) {
+    headers.Authorization = `Basic ${Buffer.from(`${params.clientId}:${params.clientSecret}`, "utf8").toString("base64")}`;
+  }
+
+  const response = await fetch(metadata.token_endpoint, {
+    method: "POST",
+    headers,
+    body,
+  });
+
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw createError(payload?.error_description || "The SSO token exchange failed.", 502);
+  }
+
+  if (!payload?.id_token) {
+    throw createError("The SSO provider did not return an ID token.", 502);
+  }
+
+  return payload;
+}
+
+async function verifyIdToken(metadata, tokenSet, expected) {
+  const { createRemoteJWKSet, jwtVerify } = await import("jose");
+  const jwks = createRemoteJWKSet(new URL(metadata.jwks_uri));
+  const result = await jwtVerify(tokenSet.id_token, jwks, {
+    issuer: expected.issuer,
+    audience: expected.clientId,
+  });
+
+  if (expected.nonce && result.payload?.nonce !== expected.nonce) {
+    throw createError("The SSO response nonce did not match.", 400);
+  }
+
+  return result.payload;
+}
+
+async function resolveSsoUser(settings, claims, client = pool) {
+  const identity = getSsoIdentity(claims);
+
+  if (!identity.issuer || !identity.subject) {
+    throw createError("The SSO provider response is missing the required subject information.", 400);
+  }
+
+  let user = await queryOne(
+    `
+      SELECT *
+      FROM users
+      WHERE sso_issuer = $1
+        AND sso_subject = $2
+        AND deleted_at IS NULL
+    `,
+    [identity.issuer, identity.subject],
+    client,
+  );
+
+  const isFirstLogin = !user;
+
+  if (!user && identity.email) {
+    user = await queryOne(
+      `
+        SELECT *
+        FROM users
+        WHERE LOWER(email) = LOWER($1)
+          AND deleted_at IS NULL
+      `,
+      [identity.email],
+      client,
+    );
+  }
+
+  if (!user) {
+    if (!settings.sso.autoProvisionEnabled) {
+      throw createError("Your account is not provisioned, and automatic SSO provisioning is disabled.", 403);
+    }
+
+    if (!identity.email) {
+      throw createError("The SSO provider did not return an email address for this account.", 403);
+    }
+
+    const role = getSsoRoleForUser(settings, identity, true);
+    const passwordHash = await hashPassword(createRandomSecret());
+    user = await queryOne(
+      `
+        INSERT INTO users (
+          id,
+          first_name,
+          last_name,
+          email,
+          password_hash,
+          role,
+          status,
+          sso_issuer,
+          sso_subject
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8)
+        RETURNING *
+      `,
+      [
+        crypto.randomUUID(),
+        identity.firstName,
+        identity.lastName,
+        identity.email,
+        passwordHash,
+        role,
+        identity.issuer,
+        identity.subject,
+      ],
+      client,
+    );
+  } else {
+    if (user.status !== "active") {
+      throw createError("This account is inactive. Please contact an administrator.", 403);
+    }
+
+    const updates = [];
+    const values = [user.id];
+    let index = values.length + 1;
+
+    if (user.sso_issuer !== identity.issuer) {
+      updates.push(`sso_issuer = $${index}`);
+      values.push(identity.issuer);
+      index += 1;
+    }
+
+    if (user.sso_subject !== identity.subject) {
+      updates.push(`sso_subject = $${index}`);
+      values.push(identity.subject);
+      index += 1;
+    }
+
+    const shouldUpdateNames =
+      user.first_name !== identity.firstName || user.last_name !== identity.lastName || user.email !== identity.email;
+    if (shouldUpdateNames && identity.email) {
+      updates.push(`first_name = $${index}`, `last_name = $${index + 1}`, `email = $${index + 2}`);
+      values.push(identity.firstName, identity.lastName, identity.email);
+      index += 3;
+    }
+
+    if (shouldSyncSsoRole(settings, !user.sso_subject || !user.sso_issuer)) {
+      const mappedRole = getSsoRoleForUser(settings, identity, !user.sso_subject || !user.sso_issuer);
+      if (mappedRole && mappedRole !== user.role) {
+        updates.push(`role = $${index}`);
+        values.push(mappedRole);
+        index += 1;
+      }
+    }
+
+    updates.push(`updated_at = NOW()`);
+    if (updates.length > 1) {
+      user = await queryOne(
+        `
+          UPDATE users
+          SET ${updates.join(", ")}
+          WHERE id = $1
+          RETURNING *
+        `,
+        values,
+        client,
+      );
+    } else {
+      await client.query("UPDATE users SET updated_at = NOW() WHERE id = $1", [user.id]);
+      user.updated_at = new Date().toISOString();
+    }
+  }
+
+  return user;
 }
 
 async function loadCurrentUser(req, _res, next) {
@@ -763,6 +1154,135 @@ app.get("/api/bootstrap", async (req, res, next) => {
   }
 });
 
+app.get("/api/auth/sso/start", async (req, res) => {
+  const returnTo = normalizeReturnTo(req.query.returnTo || "/");
+
+  try {
+    const settings = await getAppSettings();
+    if (!settings.sso.enabled) {
+      return res.redirect(`/sso-status?reason=${encodeURIComponent("not-configured")}`);
+    }
+
+    if (!settings.sso.issuerUrl || !settings.sso.clientId) {
+      return res.redirect(`/sso-status?reason=${encodeURIComponent("not-configured")}`);
+    }
+
+    const metadata = await getOidcMetadata(settings.sso.issuerUrl);
+    const state = crypto.randomBytes(24).toString("base64url");
+    const nonce = crypto.randomBytes(24).toString("base64url");
+    const codeVerifier = crypto.randomBytes(48).toString("base64url");
+    const codeChallenge = crypto.createHash("sha256").update(codeVerifier).digest("base64url");
+    const redirectUri = getSsoCallbackUrl(req);
+    const transaction = signToken({
+      type: "sso",
+      state,
+      nonce,
+      codeVerifier,
+      returnTo,
+      exp: Date.now() + 1000 * 60 * 10,
+    });
+
+    res.cookie(SSO_TRANSACTION_COOKIE, transaction, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: SESSION_COOKIE_SECURE,
+      maxAge: 1000 * 60 * 10,
+    });
+
+    const authorizationUrl = new URL(metadata.authorization_endpoint);
+    authorizationUrl.searchParams.set("client_id", settings.sso.clientId);
+    authorizationUrl.searchParams.set("redirect_uri", redirectUri);
+    authorizationUrl.searchParams.set("response_type", "code");
+    authorizationUrl.searchParams.set("scope", settings.sso.scopes || "openid profile email");
+    authorizationUrl.searchParams.set("state", state);
+    authorizationUrl.searchParams.set("nonce", nonce);
+    authorizationUrl.searchParams.set("code_challenge", codeChallenge);
+    authorizationUrl.searchParams.set("code_challenge_method", "S256");
+
+    return res.redirect(authorizationUrl.toString());
+  } catch (error) {
+    console.error(error);
+    return res.redirect(`/sso-status?reason=${encodeURIComponent("signin-failed")}`);
+  }
+});
+
+app.get("/api/auth/sso/callback", async (req, res) => {
+  const clearTransactionCookie = () => {
+    res.clearCookie(SSO_TRANSACTION_COOKIE, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: SESSION_COOKIE_SECURE,
+    });
+  };
+
+  try {
+    const transaction = verifyToken(req.cookies?.[SSO_TRANSACTION_COOKIE]);
+    clearTransactionCookie();
+
+    if (!transaction || transaction.type !== "sso") {
+      return res.redirect(`/sso-status?reason=${encodeURIComponent("session-expired")}`);
+    }
+
+    if (req.query.error) {
+      return res.redirect(`/sso-status?reason=${encodeURIComponent("signin-failed")}`);
+    }
+
+    const code = String(req.query.code || "").trim();
+    const state = String(req.query.state || "").trim();
+
+    if (!code || !state || state !== transaction.state) {
+      return res.redirect(`/sso-status?reason=${encodeURIComponent("state-mismatch")}`);
+    }
+
+    const settings = await getAppSettings();
+    const metadata = await getOidcMetadata(settings.sso.issuerUrl);
+    const tokenSet = await exchangeAuthorizationCode(metadata, {
+      code,
+      redirectUri: getSsoCallbackUrl(req),
+      codeVerifier: transaction.codeVerifier,
+      clientId: settings.sso.clientId,
+      clientSecret: settings.sso.clientSecret,
+    });
+    const claims = await verifyIdToken(metadata, tokenSet, {
+      issuer: String(metadata.issuer || settings.sso.issuerUrl).trim(),
+      clientId: settings.sso.clientId,
+      nonce: transaction.nonce,
+    });
+
+    const user = await withTransaction((client) => resolveSsoUser(settings, claims, client));
+    const token = signSession({
+      sub: user.id,
+      role: user.role,
+      exp: Date.now() + 1000 * 60 * 60 * 24 * 7,
+    });
+
+    res.cookie(SESSION_COOKIE, token, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: SESSION_COOKIE_SECURE,
+      maxAge: 1000 * 60 * 60 * 24 * 7,
+    });
+
+    return res.redirect(normalizeReturnTo(transaction.returnTo));
+  } catch (error) {
+    console.error(error);
+    const message = String(error?.message || "");
+    let reason = "signin-failed";
+
+    if (message.includes("inactive")) {
+      reason = "inactive";
+    } else if (message.includes("automatic SSO provisioning is disabled")) {
+      reason = "provisioning-disabled";
+    } else if (message.includes("email address")) {
+      reason = "missing-email";
+    } else if (message.includes("group mapping")) {
+      reason = "role-mapping-missing";
+    }
+
+    return res.redirect(`/sso-status?reason=${encodeURIComponent(reason)}`);
+  }
+});
+
 app.post("/api/auth/register", async (req, res, next) => {
   try {
     const settings = await getAppSettings();
@@ -877,6 +1397,51 @@ app.post("/api/auth/logout", (req, res) => {
 
 app.get("/api/auth/me", requireAuth, (req, res) => {
   res.json({ user: sanitizeUser(req.currentUser) });
+});
+
+app.patch("/api/auth/profile", requireAuth, async (req, res, next) => {
+  try {
+    const firstName = String(req.body.firstName || "").trim();
+    const lastName = String(req.body.lastName || "").trim();
+    const email = String(req.body.email || "").trim().toLowerCase();
+
+    if (!firstName || !lastName || !email) {
+      return res.status(400).json({ message: "First name, last name, and email are required." });
+    }
+
+    const existing = await queryOne(
+      `
+        SELECT id
+        FROM users
+        WHERE LOWER(email) = LOWER($1)
+          AND deleted_at IS NULL
+          AND id <> $2
+      `,
+      [email, req.currentUser.id],
+    );
+
+    if (existing) {
+      return res.status(409).json({ message: "An account with that email already exists." });
+    }
+
+    const user = await queryOne(
+      `
+        UPDATE users
+        SET
+          first_name = $2,
+          last_name = $3,
+          email = $4,
+          updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [req.currentUser.id, firstName, lastName, email],
+    );
+
+    res.json({ user: sanitizeUser(user) });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.post("/api/auth/change-password", requireAuth, async (req, res, next) => {
@@ -1164,12 +1729,34 @@ app.get("/api/settings/sso", requireRole("admin"), async (_req, res, next) => {
 
 app.patch("/api/settings/sso", requireRole("admin"), async (req, res, next) => {
   try {
+    const enabled = Boolean(req.body.enabled);
+    const provider = String(req.body.provider || "").trim();
+    const issuerUrl = String(req.body.issuerUrl || "").trim();
+    const clientId = String(req.body.clientId || "").trim();
+    const clientSecret = String(req.body.clientSecret || "").trim();
+    const scopes = String(req.body.scopes || "").trim();
     const autoProvisionRoleMode =
       req.body.autoProvisionRoleMode === "identity_mapping" ? "identity_mapping" : "default_role";
     const autoProvisionDefaultRole = roleRank[req.body.autoProvisionDefaultRole]
       ? req.body.autoProvisionDefaultRole
       : "viewer";
     const roleSyncMode = req.body.roleSyncMode === "each_login" ? "each_login" : "first_login";
+
+    if (enabled && !provider) {
+      throw createError("The SSO provider name is required.", 400);
+    }
+    if (enabled && !issuerUrl) {
+      throw createError("The SSO issuer URL is required.", 400);
+    }
+    if (enabled && !clientId) {
+      throw createError("The SSO client ID is required.", 400);
+    }
+    if (enabled && !clientSecret) {
+      throw createError("The SSO client secret is required.", 400);
+    }
+    if (enabled && !scopes) {
+      throw createError("The SSO scopes are required.", 400);
+    }
 
     await pool.query(
       `
@@ -1180,23 +1767,25 @@ app.patch("/api/settings/sso", requireRole("admin"), async (req, res, next) => {
           sso_issuer_url = $3,
           sso_client_id = $4,
           sso_client_secret = $5,
-          sso_password_login_enabled = $6,
-          sso_auto_provision_enabled = $7,
-          sso_auto_provision_role_mode = $8,
-          sso_auto_provision_default_role = $9,
-          sso_role_sync_mode = $10,
-          sso_admin_group = $11,
-          sso_editor_group = $12,
-          sso_viewer_group = $13,
+          sso_scopes = $6,
+          sso_password_login_enabled = $7,
+          sso_auto_provision_enabled = $8,
+          sso_auto_provision_role_mode = $9,
+          sso_auto_provision_default_role = $10,
+          sso_role_sync_mode = $11,
+          sso_admin_group = $12,
+          sso_editor_group = $13,
+          sso_viewer_group = $14,
           updated_at = NOW()
         WHERE id = TRUE
       `,
       [
-        Boolean(req.body.enabled),
-        String(req.body.provider || "").trim(),
-        String(req.body.issuerUrl || "").trim(),
-        String(req.body.clientId || "").trim(),
-        String(req.body.clientSecret || "").trim(),
+        enabled,
+        provider,
+        issuerUrl,
+        clientId,
+        clientSecret,
+        scopes,
         Boolean(req.body.passwordLoginEnabled ?? true),
         Boolean(req.body.autoProvisionEnabled),
         autoProvisionRoleMode,

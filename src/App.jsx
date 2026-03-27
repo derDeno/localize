@@ -6,9 +6,10 @@ import {
   FiDownload,
   FiEdit2,
   FiLogOut,
-  FiMenu,
+  FiMoreHorizontal,
   FiMoon,
   FiPlus,
+  FiSave,
   FiSun,
   FiUpload,
   FiX,
@@ -22,6 +23,7 @@ import {
   RouterProvider,
   createBrowserRouter,
   createRoutesFromElements,
+  useLocation,
   useNavigate,
   useOutletContext,
   useParams,
@@ -84,6 +86,14 @@ async function apiFetch(url, options = {}) {
   }
 
   return body;
+}
+
+function getSsoCallbackUrl() {
+  if (typeof window === "undefined") {
+    return "/api/auth/sso/callback";
+  }
+
+  return `${window.location.origin}/api/auth/sso/callback`;
 }
 
 function languageDisplay(code, fallbackLabel) {
@@ -302,11 +312,12 @@ function PublicOnly() {
 
 function RequireAuth() {
   const { loading, user } = useApp();
+  const location = useLocation();
   if (loading) {
     return <LoadingPage />;
   }
   if (!user) {
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/login" replace state={{ from: location }} />;
   }
   return <Outlet />;
 }
@@ -688,20 +699,19 @@ function AppShell() {
 
 function LoginPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { refreshBootstrap, settings } = useApp();
   const [form, setForm] = useState({ email: "", password: "" });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const passwordLoginEnabled = settings?.sso?.passwordLoginEnabled !== false;
   const ssoEnabled = Boolean(settings?.sso?.enabled);
+  const ssoProviderName = settings?.sso?.provider?.trim() || "SSO";
 
   function handleSsoLogin() {
-    if (settings?.sso?.autoProvisionEnabled === false) {
-      navigate("/sso-status?reason=provisioning-disabled");
-      return;
-    }
-
-    navigate("/sso-status");
+    const from = location.state?.from;
+    const returnTo = from ? `${from.pathname || ""}${from.search || ""}${from.hash || ""}` || "/" : "/";
+    window.location.assign(`/api/auth/sso/start?returnTo=${encodeURIComponent(returnTo)}`);
   }
 
   async function handleSubmit(event) {
@@ -777,7 +787,7 @@ function LoginPage() {
 
           {ssoEnabled ? (
             <button className="secondary-button" type="button" onClick={handleSsoLogin}>
-              Continue with SSO
+              {`Login with ${ssoProviderName}`}
             </button>
           ) : null}
 
@@ -794,18 +804,29 @@ function LoginPage() {
 
 function SsoStatusPage() {
   const [searchParams] = useSearchParams();
-  const { settings } = useApp();
   const reason = searchParams.get("reason") || "";
 
   let title = "SSO sign-in";
-  let message = "SSO sign-in is not connected yet.";
+  let message = "We could not complete your SSO sign-in.";
 
   if (reason === "inactive") {
     title = "Account inactive";
     message = "Your account is inactive. Please contact an administrator before signing in.";
-  } else if (reason === "provisioning-disabled" || settings?.sso?.autoProvisionEnabled === false) {
+  } else if (reason === "provisioning-disabled") {
     title = "Account access pending";
     message = "Your account is not provisioned, and automatic SSO provisioning is disabled. Please contact an administrator.";
+  } else if (reason === "missing-email") {
+    title = "Email required";
+    message = "Your identity provider did not return an email address. Please ask an administrator to add the email claim.";
+  } else if (reason === "role-mapping-missing") {
+    title = "No mapped role";
+    message = "Your account signed in successfully, but none of the configured SSO group mappings matched. Please contact an administrator.";
+  } else if (reason === "state-mismatch" || reason === "session-expired") {
+    title = "Session expired";
+    message = "The SSO sign-in session expired or became invalid. Please try again.";
+  } else if (reason === "not-configured") {
+    title = "SSO not configured";
+    message = "SSO is enabled, but the provider settings are incomplete. Please review the SSO settings.";
   }
 
   return (
@@ -977,10 +998,9 @@ function DashboardPage() {
 
   return (
     <div className="page-stack">
-      <section className="page-hero panel">
+      <section className="page-hero">
         <div>
           <h2>Projects</h2>
-          <p className="muted">Open a project card to manage languages and translations.</p>
         </div>
         {roleAllows(user, "editor") ? (
           <button className="primary-button" type="button" onClick={openCreateDialog}>
@@ -1328,7 +1348,7 @@ function ProjectPage() {
   return (
     <>
       <div className="page-stack">
-        <section className="page-hero panel">
+        <section className="page-hero">
           <div>
             <div className="project-hero-header">
               <div>
@@ -1437,7 +1457,7 @@ function ProjectPage() {
                       aria-label={`Open actions for ${display.label}`}
                       onClick={() => setLanguageActionMenu(language)}
                     >
-                      <FiMenu />
+                      <FiMoreHorizontal />
                     </button>
                   </div>
                 </article>
@@ -1708,7 +1728,7 @@ function ProjectPage() {
                   <span className="button-icon" aria-hidden="true">
                     <FiUpload />
                   </span>
-                  {uploadingLanguageCode === languageActionMenu.code ? "Uploading..." : "Upload"}
+                  {uploadingLanguageCode === languageActionMenu.code ? "Uploading..." : "Upload new file"}
                 </label>
               ) : null}
               {!languageActionMenu.isSource && roleAllows(user, "editor") && settings?.allowLanguageDelete ? (
@@ -1885,7 +1905,7 @@ function EditorPage() {
         {roleAllows(user, "editor") ? (
           <button className="primary-button" disabled={busy} type="button" onClick={handleSaveTranslations}>
             <span className="button-icon" aria-hidden="true">
-              <FiEdit2 />
+              <FiSave />
             </span>
             {busy ? "Saving..." : "Save progress"}
           </button>
@@ -1894,7 +1914,6 @@ function EditorPage() {
 
       <div className="editor-list">
         <label className="editor-search">
-          <span>Search translations</span>
           <input
             type="search"
             placeholder="Search by key, source text, or translation..."
@@ -2016,7 +2035,13 @@ function SettingsPage() {
 }
 
 function ProfileTab() {
-  const { user } = useApp();
+  const { user, setBootstrap } = useApp();
+  const { showToast } = useOutletContext();
+  const [profileForm, setProfileForm] = useState({
+    firstName: user?.firstName || "",
+    lastName: user?.lastName || "",
+    email: user?.email || "",
+  });
   const [form, setForm] = useState({
     currentPassword: "",
     newPassword: "",
@@ -2027,26 +2052,69 @@ function ProfileTab() {
     newPassword: false,
     confirmPassword: false,
   });
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  const [profileError, setProfileError] = useState("");
+  const [passwordError, setPasswordError] = useState("");
+  const [profileSubmitting, setProfileSubmitting] = useState(false);
+  const [passwordSubmitting, setPasswordSubmitting] = useState(false);
 
-  async function handleSubmit(event) {
+  useEffect(() => {
+    setProfileForm({
+      firstName: user?.firstName || "",
+      lastName: user?.lastName || "",
+      email: user?.email || "",
+    });
+  }, [user?.firstName, user?.lastName, user?.email]);
+
+  async function handleProfileSubmit(event) {
     event.preventDefault();
-    setMessage("");
-    setError("");
+    setProfileError("");
+
+    if (!profileForm.firstName.trim() || !profileForm.lastName.trim() || !profileForm.email.trim()) {
+      const message = "First name, last name, and email are required.";
+      setProfileError(message);
+      showToast("error", message);
+      return;
+    }
+
+    setProfileSubmitting(true);
+    try {
+      const payload = await apiFetch("/api/auth/profile", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(profileForm),
+      });
+      setBootstrap((current) => ({
+        ...current,
+        user: payload.user,
+      }));
+      showToast("success", "Profile saved.");
+    } catch (submitError) {
+      setProfileError(submitError.message);
+      showToast("error", submitError.message);
+    } finally {
+      setProfileSubmitting(false);
+    }
+  }
+
+  async function handlePasswordSubmit(event) {
+    event.preventDefault();
+    setPasswordError("");
 
     if (!form.currentPassword || !form.newPassword || !form.confirmPassword) {
-      setError("Please fill in all password fields.");
+      const message = "Please fill in all password fields.";
+      setPasswordError(message);
+      showToast("error", message);
       return;
     }
 
     if (form.newPassword !== form.confirmPassword) {
-      setError("The new passwords do not match.");
+      const message = "The new passwords do not match.";
+      setPasswordError(message);
+      showToast("error", message);
       return;
     }
 
-    setSubmitting(true);
+    setPasswordSubmitting(true);
     try {
       await apiFetch("/api/auth/change-password", {
         method: "POST",
@@ -2061,11 +2129,12 @@ function ProfileTab() {
         newPassword: "",
         confirmPassword: "",
       });
-      setMessage("Password updated.");
+      showToast("success", "Password updated.");
     } catch (submitError) {
-      setError(submitError.message);
+      setPasswordError(submitError.message);
+      showToast("error", submitError.message);
     } finally {
-      setSubmitting(false);
+      setPasswordSubmitting(false);
     }
   }
 
@@ -2077,26 +2146,46 @@ function ProfileTab() {
         </div>
       </div>
 
-      <div className="profile-summary-grid">
-        <label>
-          <span>First name</span>
-          <input value={user?.firstName || ""} readOnly />
-        </label>
-        <label>
-          <span>Last name</span>
-          <input value={user?.lastName || ""} readOnly />
-        </label>
-        <label>
-          <span>Email</span>
-          <input value={user?.email || ""} readOnly />
-        </label>
-        <label>
-          <span>Role</span>
-          <input value={user?.role || ""} readOnly />
-        </label>
-      </div>
+      <form className="stack-form" onSubmit={handleProfileSubmit}>
+        <div className="profile-summary-grid">
+          <label>
+            <span>First name</span>
+            <input
+              value={profileForm.firstName}
+              onChange={(event) => setProfileForm((current) => ({ ...current, firstName: event.target.value }))}
+            />
+          </label>
+          <label>
+            <span>Last name</span>
+            <input
+              value={profileForm.lastName}
+              onChange={(event) => setProfileForm((current) => ({ ...current, lastName: event.target.value }))}
+            />
+          </label>
+          <label>
+            <span>Email</span>
+            <input
+              type="email"
+              value={profileForm.email}
+              onChange={(event) => setProfileForm((current) => ({ ...current, email: event.target.value }))}
+            />
+          </label>
+          <label>
+            <span>Role</span>
+            <input value={user?.role || ""} readOnly />
+          </label>
+        </div>
 
-      <form className="stack-form profile-password-form" onSubmit={handleSubmit}>
+        <div>
+          {profileError ? <p className="error-text">{profileError}</p> : null}
+
+          <button className="primary-button" type="submit" disabled={profileSubmitting}>
+            {profileSubmitting ? "Saving..." : "Save profile"}
+          </button>
+        </div>
+      </form>
+
+      <form className="stack-form profile-password-form" onSubmit={handlePasswordSubmit}>
         <div>
           <h3>Change password</h3>
         </div>
@@ -2183,12 +2272,11 @@ function ProfileTab() {
           </label>
         </div>
 
-        {error ? <p className="error-text">{error}</p> : null}
-        {message ? <p className="success-text">{message}</p> : null}
+        {passwordError ? <p className="error-text">{passwordError}</p> : null}
 
         <div>
-          <button className="primary-button" type="submit" disabled={submitting}>
-            {submitting ? "Saving..." : "Save password"}
+          <button className="primary-button" type="submit" disabled={passwordSubmitting}>
+            {passwordSubmitting ? "Saving..." : "Save password"}
           </button>
         </div>
       </form>
@@ -2467,7 +2555,7 @@ function UsersTab() {
                       aria-label={`Open actions for ${user.firstName} ${user.lastName}`}
                       onClick={() => openActionMenu(user)}
                     >
-                      <FiMenu />
+                      <FiMoreHorizontal />
                     </button>
                   </td>
                 </tr>
@@ -2716,13 +2804,14 @@ function UsersTab() {
 }
 
 function AppSettingsTab() {
-  const { refreshBootstrap } = useApp();
+  const { setBootstrap } = useApp();
+  const { showToast } = useOutletContext();
   const [form, setForm] = useState({
     allowRegistration: true,
     allowProjectDelete: true,
     allowLanguageDelete: true,
   });
-  const [message, setMessage] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     apiFetch("/api/settings/app").then((payload) => {
@@ -2736,13 +2825,23 @@ function AppSettingsTab() {
 
   async function handleSubmit(event) {
     event.preventDefault();
-    await apiFetch("/api/settings/app", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(form),
-    });
-    await refreshBootstrap();
-    setMessage("Settings saved.");
+    setSubmitting(true);
+    try {
+      const payload = await apiFetch("/api/settings/app", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
+      setBootstrap((current) => ({
+        ...current,
+        settings: payload,
+      }));
+      showToast("success", "System settings saved.");
+    } catch (submitError) {
+      showToast("error", submitError.message);
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -2773,23 +2872,24 @@ function AppSettingsTab() {
         />
         <span>Allow language deletion</span>
       </label>
-
-      {message ? <p className="success-text">{message}</p> : null}
-
-      <button className="primary-button" type="submit">
-        Save app settings
+      <button className="primary-button" type="submit" disabled={submitting}>
+        {submitting ? "Saving..." : "Save app settings"}
       </button>
     </form>
   );
 }
 
 function SsoSettingsTab() {
+  const { setBootstrap } = useApp();
+  const { showToast } = useOutletContext();
+  const callbackUrl = getSsoCallbackUrl();
   const [form, setForm] = useState({
     enabled: false,
     provider: "",
     issuerUrl: "",
     clientId: "",
     clientSecret: "",
+    scopes: "openid profile email",
     passwordLoginEnabled: true,
     autoProvisionEnabled: false,
     autoProvisionRoleMode: "default_role",
@@ -2801,7 +2901,7 @@ function SsoSettingsTab() {
       viewer: "",
     },
   });
-  const [message, setMessage] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     apiFetch("/api/settings/sso").then((payload) => {
@@ -2811,6 +2911,7 @@ function SsoSettingsTab() {
         issuerUrl: payload.issuerUrl || "",
         clientId: payload.clientId || "",
         clientSecret: payload.clientSecret || "",
+        scopes: payload.scopes || "openid profile email",
         passwordLoginEnabled: payload.passwordLoginEnabled !== false,
         autoProvisionEnabled: Boolean(payload.autoProvisionEnabled),
         autoProvisionRoleMode:
@@ -2830,12 +2931,46 @@ function SsoSettingsTab() {
 
   async function handleSubmit(event) {
     event.preventDefault();
-    await apiFetch("/api/settings/sso", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(form),
-    });
-    setMessage("SSO settings saved. Auth flow wiring can build on this later.");
+    if (form.enabled && !form.provider.trim()) {
+      showToast("error", "The SSO provider name is required.");
+      return;
+    }
+    if (form.enabled && !form.issuerUrl.trim()) {
+      showToast("error", "The SSO issuer URL is required.");
+      return;
+    }
+    if (form.enabled && !form.clientId.trim()) {
+      showToast("error", "The SSO client ID is required.");
+      return;
+    }
+    if (form.enabled && !form.clientSecret.trim()) {
+      showToast("error", "The SSO client secret is required.");
+      return;
+    }
+    if (form.enabled && !form.scopes.trim()) {
+      showToast("error", "The SSO scopes are required.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const payload = await apiFetch("/api/settings/sso", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
+      setBootstrap((current) => ({
+        ...current,
+        settings: {
+          ...current.settings,
+          sso: payload,
+        },
+      }));
+      showToast("success", "SSO settings saved.");
+    } catch (submitError) {
+      showToast("error", submitError.message);
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -2852,11 +2987,12 @@ function SsoSettingsTab() {
       {form.enabled ? (
         <>
           <label>
-            <span>Provider</span>
+            <span>Provider name</span>
             <input
               value={form.provider}
               onChange={(event) => setForm((current) => ({ ...current, provider: event.target.value }))}
               placeholder="Azure AD, Keycloak, Okta…"
+              required={form.enabled}
             />
           </label>
 
@@ -2866,6 +3002,7 @@ function SsoSettingsTab() {
               value={form.issuerUrl}
               onChange={(event) => setForm((current) => ({ ...current, issuerUrl: event.target.value }))}
               placeholder="https://identity.example.com"
+              required={form.enabled}
             />
           </label>
 
@@ -2875,17 +3012,41 @@ function SsoSettingsTab() {
               <input
                 value={form.clientId}
                 onChange={(event) => setForm((current) => ({ ...current, clientId: event.target.value }))}
+                required={form.enabled}
               />
             </label>
 
             <label>
               <span>Client secret</span>
               <input
+                type="password"
                 value={form.clientSecret}
                 onChange={(event) => setForm((current) => ({ ...current, clientSecret: event.target.value }))}
+                required={form.enabled}
               />
             </label>
           </div>
+
+          <label>
+            <span>Scopes</span>
+            <input
+              value={form.scopes}
+              onChange={(event) => setForm((current) => ({ ...current, scopes: event.target.value }))}
+              placeholder="openid profile email groups"
+              required={form.enabled}
+            />
+          </label>
+
+          <label>
+            <span>OAuth callback / redirect URL</span>
+            <input readOnly value={callbackUrl} />
+          </label>
+
+          <p className="helper-text">
+            Register this exact URL in your OpenID Connect provider. The app starts sign-in at
+            <code> /api/auth/sso/start</code> and completes it at <code> /api/auth/sso/callback</code>. Add
+            <code> groups</code> to the scopes above if your provider requires it for role mapping claims.
+          </p>
 
           <label className="toggle-row">
             <input
@@ -3026,11 +3187,8 @@ function SsoSettingsTab() {
           ) : null}
         </>
       ) : null}
-
-      {message ? <p className="success-text">{message}</p> : null}
-
-      <button className="primary-button" type="submit">
-        Save SSO settings
+      <button className="primary-button" type="submit" disabled={submitting}>
+        {submitting ? "Saving..." : "Save SSO settings"}
       </button>
     </form>
   );

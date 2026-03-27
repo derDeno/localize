@@ -16,6 +16,7 @@ module.exports = {
       process.env.POSTGRES_DB || "localize"
     }`,
   SESSION_SECRET: process.env.SESSION_SECRET || "change-me-localize-session-secret",
+  PUBLIC_APP_URL: String(process.env.PUBLIC_APP_URL || "").trim().replace(/\/+$/g, ""),
   SESSION_COOKIE_SECURE:
     process.env.SESSION_COOKIE_SECURE === undefined
       ? process.env.NODE_ENV === "production"

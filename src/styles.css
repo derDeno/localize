@@ -84,7 +84,7 @@ a {
 
 button,
 a {
-  transition: transform 160ms ease, opacity 160ms ease, background 160ms ease;
+  transition: opacity 160ms ease, background 160ms ease, border-color 160ms ease, color 160ms ease;
 }
 
 a {
@@ -134,48 +134,25 @@ textarea {
 }
 
 input[type="checkbox"] {
-  appearance: none;
-  -webkit-appearance: none;
-  width: 0.2rem;
-  height: 0.2rem;
-  border-radius: 0.24rem;
-  border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.04);
+  appearance: auto;
+  -webkit-appearance: checkbox;
+  accent-color: var(--accent);
+  width: 1.05rem;
+  height: 1.05rem;
   display: inline-block;
-  position: relative;
   cursor: pointer;
   flex-shrink: 0;
   margin: 0;
-  transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
-}
-
-input[type="checkbox"]::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 0.2rem;
-  height: 0.39rem;
-  border-right: 0.1rem solid transparent;
-  border-bottom: 0.1rem solid transparent;
-  transform: translate(-50%, -56%) rotate(45deg) scale(0);
-  transform-origin: center;
-  transition: transform 160ms ease, border-color 160ms ease;
-}
-
-input[type="checkbox"]:checked {
-  background: linear-gradient(135deg, var(--accent) 0%, #ffb44d 100%);
-  border-color: rgba(240, 138, 36, 0.72);
-  box-shadow: 0 0 0 2px rgba(240, 138, 36, 0.1);
-}
-
-input[type="checkbox"]:checked::after {
-  border-color: var(--accent-contrast);
-  transform: translate(-50%, -56%) rotate(45deg) scale(1);
+  transition: filter 160ms ease;
 }
 
 input[type="checkbox"]:focus-visible {
-  box-shadow: 0 0 0 2px rgba(240, 138, 36, 0.14);
+  outline: 2px solid rgba(240, 138, 36, 0.22);
+  outline-offset: 2px;
+}
+
+input[type="checkbox"]:hover {
+  filter: brightness(0.96);
 }
 
 .app-shell {
@@ -412,9 +389,9 @@ input[type="checkbox"]:focus-visible {
 .page-hero {
   display: flex;
   justify-content: space-between;
-  align-items: flex-end;
+  align-items: flex-start;
   gap: 20px;
-  position: relative;
+  padding: 8px 0 4px;
 }
 
 .page-hero > :first-child {
@@ -423,15 +400,15 @@ input[type="checkbox"]:focus-visible {
 }
 
 .page-hero .detail-badges {
-  position: absolute;
-  top: 22px;
-  right: 22px;
   justify-content: flex-end;
+  flex-shrink: 0;
 }
 
 .project-hero-header {
   display: flex;
   align-items: flex-start;
+  justify-content: space-between;
+  width: 100%;
   gap: 16px;
 }
 
@@ -453,7 +430,7 @@ input[type="checkbox"]:focus-visible {
 }
 
 .title-action:hover {
-  transform: scaleX(-1) translateY(-1px);
+  color: color-mix(in srgb, var(--accent) 78%, #ffffff 22%);
 }
 
 .project-card,
@@ -563,6 +540,16 @@ input[type="checkbox"]:focus-visible {
   font-weight: 700;
 }
 
+.primary-button:hover,
+.primary-button:focus-visible {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--accent) 90%, black 10%) 0%,
+    color-mix(in srgb, #ffb44d 90%, black 10%) 100%
+  );
+  outline: none;
+}
+
 .secondary-button,
 .ghost-button,
 .tab-button,
@@ -571,10 +558,27 @@ input[type="checkbox"]:focus-visible {
   color: var(--text);
 }
 
+.secondary-button:hover,
+.secondary-button:focus-visible,
+.ghost-button:hover,
+.ghost-button:focus-visible,
+.icon-button:hover,
+.icon-button:focus-visible {
+  background: color-mix(in srgb, var(--bg-soft) 82%, var(--text) 18%);
+  outline: none;
+}
+
 .danger-button {
   background: rgba(215, 67, 60, 0.12);
   color: var(--danger);
   border-color: rgba(215, 67, 60, 0.24);
+}
+
+.danger-button:hover,
+.danger-button:focus-visible {
+  background: rgba(215, 67, 60, 0.2);
+  border-color: rgba(215, 67, 60, 0.3);
+  outline: none;
 }
 
 .tab-button.active {
@@ -697,6 +701,9 @@ input[type="checkbox"]:focus-visible {
   right: 24px;
   bottom: 24px;
   z-index: 35;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 48px;
   height: 48px;
   border-radius: 999px;
@@ -710,7 +717,7 @@ input[type="checkbox"]:focus-visible {
 }
 
 .back-to-top:hover {
-  transform: rotate(90deg) translateY(-1px);
+  background: color-mix(in srgb, var(--accent) 90%, black 10%);
 }
 
 .empty-state {
@@ -720,6 +727,7 @@ input[type="checkbox"]:focus-visible {
 
 .page-empty-state {
   padding-inline: 0;
+  padding-bottom: 80px;
 }
 
 .switch {
@@ -930,6 +938,7 @@ input[type="checkbox"]:focus-visible {
   font-size: 2rem;
   line-height: 1;
   color: currentColor;
+  cursor: pointer;
 }
 
 .dialog-close:hover {
@@ -1084,6 +1093,7 @@ input[type="checkbox"]:focus-visible {
   display: flex;
   align-items: center;
   gap: 12px;
+  margin-bottom: 16px;
 }
 
 .editor-title-text {
@@ -1203,7 +1213,7 @@ input[type="checkbox"]:focus-visible {
 }
 
 .toggle-row input {
-  width: 0.86rem;
+  width: 1.05rem;
 }
 
 .editor-row {
@@ -1219,6 +1229,16 @@ input[type="checkbox"]:focus-visible {
 
 .success-text {
   color: var(--success);
+}
+
+.helper-text {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.helper-text code {
+  font-size: 0.9em;
 }
 
 @keyframes toast-in {
