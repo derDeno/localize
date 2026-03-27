@@ -71,6 +71,9 @@ const initialProjectForm = {
   sourceLibraryFile: "",
 };
 
+const apiKeyScopeOptions = ["create", "read", "update", "delete"];
+const appVersion = __APP_VERSION__;
+
 const AppContext = createContext(null);
 
 async function apiFetch(url, options = {}) {
@@ -108,6 +111,19 @@ function languageDisplay(code, fallbackLabel) {
 
 function progressLabel(progress) {
   return `${progress.percent}% · ${progress.completed}/${progress.total}`;
+}
+
+function formatDateTime(value) {
+  if (!value) {
+    return "Never";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "Unknown";
+  }
+
+  return date.toLocaleString();
 }
 
 function getSystemTheme() {
@@ -1542,6 +1558,12 @@ function ProjectPage() {
 
             <form className="stack-form" onSubmit={handleUpdateProject}>
               <label>
+                <span>Project ID</span>
+                <input readOnly value={project.id} />
+                <span className="helper-text">Use this ID in API requests and GitHub workflow uploads.</span>
+              </label>
+
+              <label>
                 <span>Name</span>
                 <input
                   required
@@ -1960,7 +1982,7 @@ function SettingsPage() {
   const { user } = useApp();
   const isAdmin = roleAllows(user, "admin");
   const { tab } = useParams();
-  const allowedTabs = isAdmin ? ["profile", "users", "app", "sso"] : ["profile"];
+  const allowedTabs = isAdmin ? ["profile", "users", "app", "api", "sso"] : ["profile"];
   const activeTab = allowedTabs.includes(tab) ? tab : "profile";
 
   if (!tab) {
@@ -2014,6 +2036,17 @@ function SettingsPage() {
         {isAdmin ? (
           <NavLink
             className={({ isActive }) => (isActive ? "tab-button active" : "tab-button")}
+            to="/settings/api"
+            role="tab"
+            aria-selected={activeTab === "api"}
+            aria-controls="settings-panel"
+          >
+            API
+          </NavLink>
+        ) : null}
+        {isAdmin ? (
+          <NavLink
+            className={({ isActive }) => (isActive ? "tab-button active" : "tab-button")}
             to="/settings/sso"
             role="tab"
             aria-selected={activeTab === "sso"}
@@ -2028,6 +2061,7 @@ function SettingsPage() {
         {activeTab === "profile" ? <ProfileTab /> : null}
         {isAdmin && activeTab === "users" ? <UsersTab /> : null}
         {isAdmin && activeTab === "app" ? <AppSettingsTab /> : null}
+        {isAdmin && activeTab === "api" ? <ApiSettingsTab /> : null}
         {isAdmin && activeTab === "sso" ? <SsoSettingsTab /> : null}
       </section>
     </main>
@@ -2846,6 +2880,8 @@ function AppSettingsTab() {
 
   return (
     <form className="stack-form app-settings-form" onSubmit={handleSubmit}>
+      <p className="helper-text">App-Version: {appVersion}</p>
+
       <label className="toggle-row">
         <input
           type="checkbox"
@@ -2876,6 +2912,481 @@ function AppSettingsTab() {
         {submitting ? "Saving..." : "Save app settings"}
       </button>
     </form>
+  );
+}
+
+function ApiSettingsTab() {
+  const { showToast } = useOutletContext();
+  const [apiKeys, setApiKeys] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [projectsLoading, setProjectsLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [selectedApiKey, setSelectedApiKey] = useState(null);
+  const [createdSecret, setCreatedSecret] = useState("");
+  const [form, setForm] = useState({
+    name: "",
+    scopes: ["update"],
+    projectAccessMode: "all",
+    projectIds: [],
+  });
+
+  const selectedProjectNames = useMemo(() => {
+    const selectedIds = new Set(form.projectIds);
+    return projects.filter((project) => selectedIds.has(project.id)).map((project) => project.name);
+  }, [form.projectIds, projects]);
+
+  async function loadProjects({ silent = false } = {}) {
+    if (!silent) {
+      setProjectsLoading(true);
+    }
+
+    try {
+      const projectsPayload = await apiFetch("/api/projects");
+      setProjects(projectsPayload);
+      return projectsPayload;
+    } catch (loadError) {
+      if (!silent) {
+        setError(loadError.message);
+      }
+      return [];
+    } finally {
+      if (!silent) {
+        setProjectsLoading(false);
+      }
+    }
+  }
+
+  useEffect(() => {
+    async function loadApiSettings() {
+      setLoading(true);
+      setError("");
+      try {
+        const keysPayload = await apiFetch("/api/settings/api-keys");
+        setApiKeys(keysPayload);
+      } catch (loadError) {
+        setError(loadError.message);
+      } finally {
+        setLoading(false);
+      }
+
+      await loadProjects({ silent: true });
+    }
+
+    loadApiSettings();
+  }, []);
+
+  useEffect(() => {
+    if (!isCreateDialogOpen || form.projectAccessMode !== "selected") {
+      return;
+    }
+
+    loadProjects();
+  }, [isCreateDialogOpen, form.projectAccessMode]);
+
+  function resetForm() {
+    setForm({
+      name: "",
+      scopes: ["update"],
+      projectAccessMode: "all",
+      projectIds: [],
+    });
+  }
+
+  function openCreateDialog() {
+    resetForm();
+    setCreatedSecret("");
+    setError("");
+    setIsCreateDialogOpen(true);
+  }
+
+  function closeCreateDialog() {
+    setIsCreateDialogOpen(false);
+    resetForm();
+  }
+
+  function openDeleteDialog(apiKey) {
+    setSelectedApiKey(apiKey);
+    setError("");
+    setIsDeleteDialogOpen(true);
+  }
+
+  function closeDeleteDialog() {
+    setIsDeleteDialogOpen(false);
+    setSelectedApiKey(null);
+  }
+
+  function toggleScope(scope) {
+    setForm((current) => ({
+      ...current,
+      scopes: current.scopes.includes(scope)
+        ? current.scopes.filter((value) => value !== scope)
+        : [...current.scopes, scope],
+    }));
+  }
+
+  function toggleProject(projectId) {
+    setForm((current) => ({
+      ...current,
+      projectIds: current.projectIds.includes(projectId)
+        ? current.projectIds.filter((value) => value !== projectId)
+        : [...current.projectIds, projectId],
+    }));
+  }
+
+  async function handleCreateKey(event) {
+    event.preventDefault();
+    setError("");
+
+    if (!form.name.trim()) {
+      const message = "The API key name is required.";
+      setError(message);
+      showToast("error", message);
+      return;
+    }
+
+    if (!form.scopes.length) {
+      const message = "Please choose at least one scope.";
+      setError(message);
+      showToast("error", message);
+      return;
+    }
+
+    if (form.projectAccessMode === "selected" && !form.projectIds.length) {
+      const message = "Please choose at least one project.";
+      setError(message);
+      showToast("error", message);
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const payload = await apiFetch("/api/settings/api-keys", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
+      setApiKeys((current) => [payload.record, ...current]);
+      setCreatedSecret(payload.apiKey);
+      resetForm();
+      showToast("success", "API key created.");
+    } catch (submitError) {
+      setError(submitError.message);
+      showToast("error", submitError.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleDeleteKey() {
+    if (!selectedApiKey) {
+      return;
+    }
+
+    setSubmitting(true);
+    setError("");
+    try {
+      await apiFetch(`/api/settings/api-keys/${selectedApiKey.id}`, {
+        method: "DELETE",
+      });
+      setApiKeys((current) => current.filter((entry) => entry.id !== selectedApiKey.id));
+      closeDeleteDialog();
+      showToast("success", "API key deleted.");
+    } catch (requestError) {
+      setError(requestError.message);
+      showToast("error", requestError.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function copyCreatedSecret() {
+    if (!createdSecret || !navigator?.clipboard) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(createdSecret);
+      showToast("success", "API key copied.");
+    } catch (_error) {
+      showToast("error", "Copying the API key failed.");
+    }
+  }
+
+  function projectAccessLabel(apiKey) {
+    if (apiKey.projectAccessMode === "all") {
+      return "All projects";
+    }
+
+    const allowedIds = new Set(apiKey.projectIds);
+    const names = projects.filter((project) => allowedIds.has(project.id)).map((project) => project.name);
+    return names.length ? names.join(", ") : `${apiKey.projectIds.length} selected`;
+  }
+
+  return (
+    <>
+      <section className="page-stack">
+        <div className="section-head">
+          <div>
+            <h3>API keys</h3>
+            <p className="helper-text">Create scoped keys for updating project versions and language entries.</p>
+          </div>
+          <button className="primary-button" type="button" onClick={openCreateDialog}>
+            <span className="button-icon" aria-hidden="true">
+              <FiPlus />
+            </span>
+            Create API key
+          </button>
+        </div>
+
+        {loading ? <p>Loading API keys…</p> : null}
+        {error ? <p className="error-text">{error}</p> : null}
+
+        {!loading ? (
+          <div className="users-table-wrap">
+            <table className="users-table api-keys-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Key</th>
+                  <th>Scope</th>
+                  <th>Projects</th>
+                  <th>Last used</th>
+                  <th className="actions-cell">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {apiKeys.length ? (
+                  apiKeys.map((apiKey) => (
+                    <tr key={apiKey.id}>
+                      <td>{apiKey.name}</td>
+                      <td className="api-key-preview">{apiKey.keyPreview}</td>
+                      <td>{apiKey.scopes.join(", ")}</td>
+                      <td>{projectAccessLabel(apiKey)}</td>
+                      <td>{formatDateTime(apiKey.lastUsedAt)}</td>
+                      <td className="actions-cell">
+                        <button
+                          className="danger-button table-delete-button"
+                          type="button"
+                          disabled={submitting}
+                          onClick={() => openDeleteDialog(apiKey)}
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan="6">
+                      <span className="helper-text">No API keys created yet.</span>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+      </section>
+
+      <section className="page-stack api-endpoint-card">
+        <div className="section-head">
+          <div>
+            <h3>API endpoints</h3>
+          </div>
+        </div>
+        <p className="helper-text">
+          Send the key with <code>Authorization: Bearer YOUR_API_KEY</code> or <code>x-api-key</code>.
+        </p>
+        <div className="api-doc-grid">
+          <article className="api-doc-block">
+            <h4>Update project version</h4>
+            <pre>{`PATCH /api/key/projects/:projectId/version
+Content-Type: application/json
+
+{
+  "version": "2.0.0"
+}`}</pre>
+          </article>
+          <article className="api-doc-block">
+            <h4>Update source or target language entries</h4>
+            <pre>{`PUT /api/key/projects/:projectId/languages/:languageCode
+Content-Type: application/json
+
+{
+  "entries": {
+    "common.save": "Save",
+    "home.title": "Welcome"
+  }
+}`}</pre>
+          </article>
+        </div>
+        <p className="helper-text">
+          If you update the source language, the app keeps the same key set across all project languages and preserves
+          existing translations where keys still match.
+        </p>
+      </section>
+
+      {isCreateDialogOpen ? (
+        <DialogPortal>
+          <div className="dialog-backdrop">
+            <div className="dialog panel" onClick={(event) => event.stopPropagation()}>
+              <div className="dialog-header">
+                <div>
+                  <h2>Create API key</h2>
+                </div>
+                <button className="dialog-close" type="button" aria-label="Close dialog" onClick={closeCreateDialog}>
+                  <FiX />
+                </button>
+              </div>
+
+              <form className="stack-form" onSubmit={handleCreateKey}>
+                {createdSecret ? (
+                  <div className="api-secret-card">
+                    <div>
+                      <strong>Save this key now.</strong>
+                      <p className="helper-text">For security, the full key is only shown once after creation.</p>
+                    </div>
+                    <code>{createdSecret}</code>
+                    <div className="dialog-actions">
+                      <button className="secondary-button" type="button" onClick={copyCreatedSecret}>
+                        Copy key
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+
+                <label>
+                  <span>Name</span>
+                  <input
+                    value={form.name}
+                    onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+                    placeholder="Deployment pipeline"
+                    required
+                  />
+                </label>
+
+                <fieldset className="api-scope-fieldset">
+                  <legend>Scope</legend>
+                  <div className="api-checkbox-grid">
+                    {apiKeyScopeOptions.map((scope) => (
+                      <label className="toggle-row" key={scope}>
+                        <input
+                          type="checkbox"
+                          checked={form.scopes.includes(scope)}
+                          onChange={() => toggleScope(scope)}
+                        />
+                        <span>{scope}</span>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+
+                <label>
+                  <span>Project access</span>
+                  <select
+                    value={form.projectAccessMode}
+                    onChange={async (event) => {
+                      const nextMode = event.target.value === "selected" ? "selected" : "all";
+                      setForm((current) => ({
+                        ...current,
+                        projectAccessMode: nextMode,
+                        projectIds: nextMode === "selected" ? current.projectIds : [],
+                      }));
+
+                      if (nextMode === "selected") {
+                        await loadProjects();
+                      }
+                    }}
+                  >
+                    <option value="all">All projects</option>
+                    <option value="selected">Selected projects</option>
+                  </select>
+                </label>
+
+                {form.projectAccessMode === "selected" ? (
+                  <div className="api-project-picker">
+                    <div className="api-project-picker-head">
+                      <strong>Select projects</strong>
+                      <span className="helper-text">
+                        {selectedProjectNames.length ? selectedProjectNames.join(", ") : "No project selected"}
+                      </span>
+                    </div>
+                    <div className="api-project-list">
+                      {projectsLoading ? (
+                        <span className="helper-text">Loading projects…</span>
+                      ) : projects.length ? (
+                        projects.map((project) => (
+                          <label className="toggle-row api-project-option" key={project.id}>
+                            <input
+                              type="checkbox"
+                              checked={form.projectIds.includes(project.id)}
+                              onChange={() => toggleProject(project.id)}
+                            />
+                            <span>{project.name}</span>
+                          </label>
+                        ))
+                      ) : (
+                        <span className="helper-text">No projects are available yet.</span>
+                      )}
+                    </div>
+                  </div>
+                ) : null}
+
+                {error ? <p className="error-text">{error}</p> : null}
+
+                <div className="dialog-actions">
+                  <button className="secondary-button" type="button" onClick={closeCreateDialog}>
+                    Close
+                  </button>
+                  <button className="primary-button" type="submit" disabled={submitting}>
+                    {submitting ? "Creating..." : "Create key"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </DialogPortal>
+      ) : null}
+
+      {isDeleteDialogOpen ? (
+        <DialogPortal>
+          <div className="dialog-backdrop" onClick={closeDeleteDialog}>
+            <div className="dialog panel dialog-compact" onClick={(event) => event.stopPropagation()}>
+              <div className="dialog-header">
+                <div>
+                  <h2>Delete API key</h2>
+                </div>
+                <button className="dialog-close" type="button" aria-label="Close dialog" onClick={closeDeleteDialog}>
+                  <FiX />
+                </button>
+              </div>
+
+              <div className="dialog-copy">
+                <p className="muted">
+                  Delete <strong>{selectedApiKey?.name}</strong>? Applications using this key will lose access
+                  immediately. This cannot be undone.
+                </p>
+              </div>
+
+              {error ? <p className="error-text">{error}</p> : null}
+
+              <div className="dialog-actions">
+                <button className="secondary-button" type="button" onClick={closeDeleteDialog}>
+                  Cancel
+                </button>
+                <button className="danger-button" type="button" disabled={submitting} onClick={handleDeleteKey}>
+                  {submitting ? "Deleting..." : "Delete key"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </DialogPortal>
+      ) : null}
+    </>
   );
 }
 

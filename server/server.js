@@ -393,6 +393,81 @@ function createRandomSecret() {
   return crypto.randomBytes(32).toString("base64url");
 }
 
+function hashApiKey(apiKey) {
+  return new Promise((resolve, reject) => {
+    crypto.scrypt(String(apiKey || ""), SESSION_SECRET, 64, (error, derivedKey) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve(derivedKey.toString("hex"));
+    });
+  });
+}
+
+function createApiKeyValue() {
+  return `lz_${crypto.randomBytes(24).toString("base64url")}`;
+}
+
+function maskApiKey(keyPrefix) {
+  const prefix = String(keyPrefix || "").trim();
+  return prefix ? `${prefix}••••••••••••••••` : "••••••••••••••••";
+}
+
+function sanitizeApiKey(row) {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    id: row.id,
+    name: row.name,
+    keyPreview: maskApiKey(row.key_prefix),
+    scopes: Array.isArray(row.scopes_json) ? row.scopes_json : [],
+    projectAccessMode: row.project_access_mode === "selected" ? "selected" : "all",
+    projectIds: Array.isArray(row.project_ids_json) ? row.project_ids_json : [],
+    createdBy: row.created_by,
+    lastUsedAt: row.last_used_at,
+    createdAt: row.created_at,
+  };
+}
+
+function normalizeApiKeyScopes(input) {
+  const scopes = Array.isArray(input) ? input : [];
+  const normalized = Array.from(
+    new Set(
+      scopes
+        .map((scope) => String(scope || "").trim().toLowerCase())
+        .filter((scope) => ["create", "read", "update", "delete"].includes(scope)),
+    ),
+  );
+
+  if (!normalized.length) {
+    throw createError("Please choose at least one API key scope.", 400);
+  }
+
+  return normalized;
+}
+
+function normalizeApiKeyProjectIds(input) {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(
+      input
+        .map((projectId) => String(projectId || "").trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
+function getActorId(req) {
+  return req.currentUser?.id || req.apiKey?.created_by || null;
+}
+
 function sanitizeUser(user) {
   if (!user) {
     return null;
@@ -771,6 +846,53 @@ async function loadCurrentUser(req, _res, next) {
   next();
 }
 
+async function loadApiKey(req, _res, next) {
+  req.apiKey = null;
+
+  const authorization = String(req.get("authorization") || "").trim();
+  const bearerToken = authorization.toLowerCase().startsWith("bearer ")
+    ? authorization.slice("bearer ".length).trim()
+    : "";
+  const rawApiKey = bearerToken || String(req.get("x-api-key") || "").trim();
+
+  if (!rawApiKey) {
+    next();
+    return;
+  }
+
+  const keyHash = await hashApiKey(rawApiKey);
+  const apiKey = await queryOne(
+    `
+      SELECT *
+      FROM api_keys
+      WHERE key_hash = $1
+        AND deleted_at IS NULL
+    `,
+    [keyHash],
+  );
+
+  if (!apiKey) {
+    next();
+    return;
+  }
+
+  await pool.query(
+    `
+      UPDATE api_keys
+      SET last_used_at = NOW()
+      WHERE id = $1
+    `,
+    [apiKey.id],
+  );
+
+  req.apiKey = {
+    ...apiKey,
+    scopes_json: Array.isArray(apiKey.scopes_json) ? apiKey.scopes_json : [],
+    project_ids_json: Array.isArray(apiKey.project_ids_json) ? apiKey.project_ids_json : [],
+  };
+  next();
+}
+
 function requireAuth(req, res, next) {
   if (!req.currentUser) {
     res.status(401).json({ message: "Please sign in to continue." });
@@ -794,6 +916,41 @@ function requireRole(minRole) {
 
     next();
   };
+}
+
+function requireApiKeyScope(scope) {
+  return (req, res, next) => {
+    if (!req.apiKey) {
+      res.status(401).json({ message: "A valid API key is required." });
+      return;
+    }
+
+    if (!req.apiKey.scopes_json.includes(scope)) {
+      res.status(403).json({ message: `This API key does not allow ${scope} operations.` });
+      return;
+    }
+
+    next();
+  };
+}
+
+function requireApiKeyProjectAccess(req, res, next) {
+  if (!req.apiKey) {
+    res.status(401).json({ message: "A valid API key is required." });
+    return;
+  }
+
+  if (req.apiKey.project_access_mode === "all") {
+    next();
+    return;
+  }
+
+  if (req.apiKey.project_ids_json.includes(req.params.projectId)) {
+    next();
+    return;
+  }
+
+  res.status(403).json({ message: "This API key does not have access to the selected project." });
 }
 
 async function requireDeleteSetting(kind, req, res, next) {
@@ -1141,7 +1298,164 @@ async function upsertTranslations(projectId, language, entries, userId, client) 
   );
 }
 
+async function validateApiKeyProjects(projectIds, client = pool) {
+  if (!projectIds.length) {
+    return [];
+  }
+
+  const result = await client.query(
+    `
+      SELECT id
+      FROM projects
+      WHERE deleted_at IS NULL
+        AND id = ANY($1::uuid[])
+    `,
+    [projectIds],
+  );
+
+  const existingIds = new Set(result.rows.map((row) => row.id));
+  const missingProjectIds = projectIds.filter((projectId) => !existingIds.has(projectId));
+  if (missingProjectIds.length) {
+    throw createError("One or more selected projects were not found.", 404);
+  }
+
+  return projectIds;
+}
+
+async function listApiKeys() {
+  const result = await pool.query(
+    `
+      SELECT *
+      FROM api_keys
+      WHERE deleted_at IS NULL
+      ORDER BY created_at DESC
+    `,
+  );
+
+  return result.rows.map(sanitizeApiKey);
+}
+
+async function createApiKey({ name, scopes, projectAccessMode, projectIds, createdBy }) {
+  const apiKey = createApiKeyValue();
+  const keyHash = await hashApiKey(apiKey);
+  const safeName = String(name || "").trim();
+
+  if (!safeName) {
+    throw createError("The API key name is required.", 400);
+  }
+
+  const normalizedScopes = normalizeApiKeyScopes(scopes);
+  const normalizedProjectAccessMode = projectAccessMode === "selected" ? "selected" : "all";
+  const normalizedProjectIds = normalizeApiKeyProjectIds(projectIds);
+
+  if (normalizedProjectAccessMode === "selected" && !normalizedProjectIds.length) {
+    throw createError("Please select at least one project for this API key.", 400);
+  }
+
+  await validateApiKeyProjects(normalizedProjectIds);
+
+  const row = await queryOne(
+    `
+      INSERT INTO api_keys (
+        id,
+        name,
+        key_hash,
+        key_prefix,
+        scopes_json,
+        project_access_mode,
+        project_ids_json,
+        created_by
+      )
+      VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7::jsonb, $8)
+      RETURNING *
+    `,
+    [
+      crypto.randomUUID(),
+      safeName,
+      keyHash,
+      apiKey.slice(0, 10),
+      JSON.stringify(normalizedScopes),
+      normalizedProjectAccessMode,
+      JSON.stringify(normalizedProjectIds),
+      createdBy || null,
+    ],
+  );
+
+  return {
+    apiKey,
+    record: sanitizeApiKey(row),
+  };
+}
+
+async function updateProjectVersionValue(projectId, version, actorId, client) {
+  const safeVersion = String(version || "").trim();
+  await getProjectRow(projectId, client);
+  await client.query(
+    `
+      UPDATE projects
+      SET
+        version = $2,
+        updated_at = NOW(),
+        updated_by = $3
+      WHERE id = $1
+    `,
+    [projectId, safeVersion, actorId || null],
+  );
+  await persistProjectConfig(projectId, actorId, client);
+  await createProjectVersion(projectId, actorId, client);
+}
+
+function normalizeEntryPayload(entries) {
+  if (!isPlainObject(entries) && !Array.isArray(entries)) {
+    throw createError("The entries payload must be a JSON object or array.", 400);
+  }
+
+  const flattened = flattenJson(entries);
+  return Object.fromEntries(
+    Object.entries(flattened).map(([key, value]) => [String(key), stringifyValue(value)]),
+  );
+}
+
+async function updateProjectLanguageEntries(projectId, languageCode, entries, actorId, client) {
+  const normalizedLanguageCode = String(languageCode || "").trim().toLowerCase();
+  const project = await getProjectRow(projectId, client);
+  const sourceLanguage = await getLanguageRow(projectId, project.source_language, client);
+  const targetLanguage = await getLanguageRow(projectId, normalizedLanguageCode, client);
+  const submittedEntries = normalizeEntryPayload(entries);
+
+  if (targetLanguage.code === sourceLanguage.code) {
+    if (!Object.keys(submittedEntries).length) {
+      throw createError("The source language must contain at least one translation key.", 400);
+    }
+
+    await upsertTranslations(projectId, sourceLanguage, submittedEntries, actorId, client);
+
+    const languages = await getProjectLanguages(projectId, client);
+    for (const language of languages) {
+      if (language.code === sourceLanguage.code) {
+        continue;
+      }
+
+      const existingEntries = await getTranslationEntries(projectId, language.id, client);
+      const syncedEntries = Object.fromEntries(
+        Object.keys(submittedEntries).map((key) => [key, String(existingEntries[key] ?? "")]),
+      );
+      await upsertTranslations(projectId, language, syncedEntries, actorId, client);
+    }
+  } else {
+    const sourceEntries = await getTranslationEntries(projectId, sourceLanguage.id, client);
+    const safeEntries = Object.fromEntries(
+      Object.keys(sourceEntries).map((key) => [key, String(submittedEntries[key] ?? "")]),
+    );
+    await upsertTranslations(projectId, targetLanguage, safeEntries, actorId, client);
+  }
+
+  await persistProjectConfig(projectId, actorId, client);
+  await createProjectVersion(projectId, actorId, client);
+}
+
 app.use(loadCurrentUser);
+app.use(loadApiKey);
 
 app.get("/api/bootstrap", async (req, res, next) => {
   try {
@@ -1803,6 +2117,61 @@ app.patch("/api/settings/sso", requireRole("admin"), async (req, res, next) => {
   }
 });
 
+app.get("/api/settings/api-keys", requireRole("admin"), async (_req, res, next) => {
+  try {
+    res.json(await listApiKeys());
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/settings/api-keys", requireRole("admin"), async (req, res, next) => {
+  try {
+    const payload = await createApiKey({
+      name: req.body.name,
+      scopes: req.body.scopes,
+      projectAccessMode: req.body.projectAccessMode,
+      projectIds: req.body.projectIds,
+      createdBy: req.currentUser.id,
+    });
+
+    res.status(201).json(payload);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/settings/api-keys/:keyId", requireRole("admin"), async (req, res, next) => {
+  try {
+    const existing = await queryOne(
+      `
+        SELECT id
+        FROM api_keys
+        WHERE id = $1
+          AND deleted_at IS NULL
+      `,
+      [req.params.keyId],
+    );
+
+    if (!existing) {
+      return res.status(404).json({ message: "The selected API key was not found." });
+    }
+
+    await pool.query(
+      `
+        UPDATE api_keys
+        SET deleted_at = NOW()
+        WHERE id = $1
+      `,
+      [req.params.keyId],
+    );
+
+    res.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/library", requireAuth, async (_req, res, next) => {
   try {
     res.json(await listLibraryFiles());
@@ -1810,6 +2179,59 @@ app.get("/api/library", requireAuth, async (_req, res, next) => {
     next(error);
   }
 });
+
+app.patch(
+  "/api/key/projects/:projectId/version",
+  requireApiKeyScope("update"),
+  requireApiKeyProjectAccess,
+  async (req, res, next) => {
+    try {
+      await withTransaction(async (client) => {
+        await updateProjectVersionValue(req.params.projectId, req.body.version, getActorId(req), client);
+      });
+
+      await syncProjectFiles(req.params.projectId);
+      res.json(await buildProjectSummary(req.params.projectId));
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+app.put(
+  "/api/key/projects/:projectId/languages/:languageCode",
+  requireApiKeyScope("update"),
+  requireApiKeyProjectAccess,
+  async (req, res, next) => {
+    try {
+      await withTransaction(async (client) => {
+        await updateProjectLanguageEntries(
+          req.params.projectId,
+          req.params.languageCode,
+          req.body.entries,
+          getActorId(req),
+          client,
+        );
+      });
+
+      await syncProjectFiles(req.params.projectId);
+      const project = await getProjectRow(req.params.projectId);
+      const sourceLanguage = await getLanguageRow(req.params.projectId, project.source_language);
+      const targetLanguage = await getLanguageRow(req.params.projectId, req.params.languageCode);
+      const sourceEntries = await getTranslationEntries(req.params.projectId, sourceLanguage.id);
+      const translationEntries = await getTranslationEntries(req.params.projectId, targetLanguage.id);
+
+      res.json({
+        ok: true,
+        languageCode: targetLanguage.code,
+        isSource: targetLanguage.code === project.source_language,
+        progress: countProgress(sourceEntries, translationEntries),
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 app.post("/api/library/upload", requireRole("editor"), upload.single("file"), async (req, res, next) => {
   try {
@@ -2210,18 +2632,13 @@ app.get("/api/projects/:projectId/languages/:languageCode", requireAuth, async (
 app.put("/api/projects/:projectId/languages/:languageCode", requireRole("editor"), async (req, res, next) => {
   try {
     await withTransaction(async (client) => {
-      const project = await getProjectRow(req.params.projectId, client);
-      const sourceLanguage = await getLanguageRow(req.params.projectId, project.source_language, client);
-      const targetLanguage = await getLanguageRow(req.params.projectId, req.params.languageCode, client);
-      const sourceEntries = await getTranslationEntries(req.params.projectId, sourceLanguage.id, client);
-      const submittedEntries = req.body.entries || {};
-      const safeEntries = Object.fromEntries(
-        Object.keys(sourceEntries).map((key) => [key, String(submittedEntries[key] ?? "")]),
+      await updateProjectLanguageEntries(
+        req.params.projectId,
+        req.params.languageCode,
+        req.body.entries,
+        req.currentUser.id,
+        client,
       );
-
-      await upsertTranslations(req.params.projectId, targetLanguage, safeEntries, req.currentUser.id, client);
-      await persistProjectConfig(req.params.projectId, req.currentUser.id, client);
-      await createProjectVersion(req.params.projectId, req.currentUser.id, client);
     });
 
     await syncProjectFiles(req.params.projectId);

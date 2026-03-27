@@ -239,6 +239,10 @@ input[type="checkbox"]:hover {
   width: auto;
 }
 
+.app-settings-form .helper-text {
+  margin-bottom: 8px;
+}
+
 .sso-settings-form .primary-button {
   justify-self: flex-start;
   width: auto;
@@ -816,6 +820,8 @@ input[type="checkbox"]:hover {
 
 .dialog {
   width: min(560px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
 }
 
 .dialog-compact {
@@ -823,33 +829,33 @@ input[type="checkbox"]:hover {
 }
 
 .dialog.panel {
-  background: rgba(255, 255, 255, 0.98);
-  border-color: rgba(20, 34, 53, 0.12);
-  color: #142235;
+  background: color-mix(in srgb, var(--bg-elevated) 96%, var(--bg) 4%);
+  border-color: var(--line);
+  color: var(--text);
 }
 
 .dialog.panel .muted,
 .dialog.panel label > span,
 .dialog.panel .flag-select-chevron {
-  color: #5d728c;
+  color: var(--muted);
 }
 
 .dialog.panel input,
 .dialog.panel textarea,
 .dialog.panel select,
 .dialog.panel .flag-select-trigger {
-  background: rgba(20, 34, 53, 0.04);
-  border-color: rgba(20, 34, 53, 0.12);
-  color: #142235;
+  background: var(--bg-soft);
+  border-color: var(--line);
+  color: var(--text);
 }
 
 .dialog.panel .secondary-button,
 .dialog.panel .ghost-button,
 .dialog.panel .tab-button,
 .dialog.panel .icon-button {
-  background: rgba(20, 34, 53, 0.04);
-  border-color: rgba(20, 34, 53, 0.12);
-  color: #142235;
+  background: var(--bg-soft);
+  border-color: var(--line);
+  color: var(--text);
 }
 
 .dialog.panel .dropzone {
@@ -1206,6 +1212,11 @@ input[type="checkbox"]:hover {
   font-size: 1.35rem;
 }
 
+.table-delete-button {
+  padding: 8px 12px;
+  min-height: auto;
+}
+
 .toggle-row {
   display: flex;
   align-items: center;
@@ -1239,6 +1250,106 @@ input[type="checkbox"]:hover {
 
 .helper-text code {
   font-size: 0.9em;
+}
+
+.api-keys-table .api-key-preview {
+  font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+  font-size: 0.84rem;
+}
+
+.api-endpoint-card {
+  padding-top: 8px;
+}
+
+.api-doc-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.api-doc-block {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--bg-soft);
+}
+
+.api-doc-block h4 {
+  margin: 0 0 10px;
+}
+
+.api-doc-block pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+  font-size: 0.84rem;
+}
+
+.api-secret-card {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid rgba(83, 177, 117, 0.25);
+  border-radius: 18px;
+  background: rgba(83, 177, 117, 0.08);
+}
+
+.api-secret-card p {
+  margin: 6px 0 0;
+}
+
+.api-secret-card code {
+  display: block;
+  padding: 12px 14px;
+  border-radius: 14px;
+  overflow-x: auto;
+  background: rgba(10, 22, 33, 0.82);
+  color: #f5f8fb;
+  font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+}
+
+.api-scope-fieldset {
+  margin: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+}
+
+.api-scope-fieldset legend {
+  padding: 0 8px;
+  color: var(--muted);
+}
+
+.api-checkbox-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.api-project-picker {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--bg-soft);
+}
+
+.api-project-picker-head {
+  display: grid;
+  gap: 6px;
+}
+
+.api-project-list {
+  display: grid;
+  gap: 10px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.api-project-option {
+  justify-content: flex-start;
 }
 
 @keyframes toast-in {
@@ -1275,7 +1386,9 @@ input[type="checkbox"]:hover {
 
   .dashboard-grid,
   .project-language-grid,
-  .split-grid {
+  .split-grid,
+  .api-doc-grid,
+  .api-checkbox-grid {
     grid-template-columns: 1fr;
   }
 

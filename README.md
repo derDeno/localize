@@ -14,24 +14,6 @@ The app now stores users, projects, languages, translations, settings, and proje
 - Admin settings for user management, app policies, and SSO configuration placeholders
 - Project revisions stored in the database and JSON snapshots exported to disk
 
-## Development
-
-```bash
-npm install
-npm run db:init
-npm run dev
-```
-
-This starts:
-
-- Vite on `http://localhost:5173`
-- The API server on `http://localhost:3001`
-- PostgreSQL-backed API logic after migrations and seed data are applied
-
-Default seeded admin credentials:
-
-- Email: `admin@localize.local`
-- Password: `admin123!`
 
 ## Docker
 
@@ -47,36 +29,6 @@ This starts:
 The app stores exported JSON snapshots and library files in [`data`](./data), mounted into the container at `/app/data`.
 Default app port is `3001`.
 
-### Live frontend changes without rebuilding
-
-If you want a live stack for development or staging on this machine, use the separate Compose file:
-
-```bash
-docker compose -f docker-compose.live.yml up --build
-```
-
-This mode:
-
-- builds the local source with the `development` Docker target
-- bind-mounts the repository into the container
-- runs `npm run dev` instead of the production server
-- exposes Vite on `http://localhost:5173`
-- keeps the API on `http://localhost:3002` by default, so it does not clash with the production-style Compose stack on `3001`
-- reloads the frontend when files under [`src`](./src) change, without rebuilding the image
-
-The first start may run `npm ci` inside the container to populate the named `node_modules` volume. After that, frontend edits are picked up directly from the bind mount.
-When `package-lock.json` changes, the live container automatically reruns `npm ci` on startup so newly added packages are installed into the Docker-managed `node_modules` volume.
-
-If you want different host ports, you can override them:
-
-```bash
-LOCALIZE_APP_PORT=3100 LOCALIZE_VITE_PORT=5174 docker compose -f docker-compose.live.yml up --build
-```
-
-Use this live Compose setup for development or an internal preview environment. For a real production deployment, keep using the production image flow from [`docker-compose.yml`](./docker-compose.yml), because hot-reload servers and bind mounts are not a good fit for internet-facing production.
-
-For PostgreSQL 18.x, the official Docker image moved its default `PGDATA` to a versioned path under `/var/lib/postgresql`, so the Compose file mounts the volume at `/var/lib/postgresql` and sets `PGDATA=/var/lib/postgresql/18/docker`.
-If you are upgrading from an older Compose setup that mounted `/var/lib/postgresql/data`, migrate the existing volume contents into the new `18/docker` subdirectory before reusing that volume.
 
 ## Environment
 
@@ -93,4 +45,56 @@ The app container supports these main environment variables:
 - `ADMIN_EMAIL`
 - `ADMIN_PASSWORD`
 
-App policy settings like registration and delete permissions are initialized in the database on first run and should be managed afterward from the settings page.
+
+## GitHub workflow uploads
+
+You can upload translation files and update the project version from GitHub Actions with the bundled script and composite action.
+
+The script expects one JSON file per language, named `<languageCode>.json`. By default it looks in common folders like `languages`, `locales`, `translations`, `i18n`, and their `src` or `public` variants. You can override that with `translations-dir`.
+
+
+### CLI usage
+
+```bash
+LOCALIZE_BASE_URL=https://localize.example.com \
+npm run push:translations -- \
+  --project-id 12345678-1234-1234-1234-123456789abc \
+  --api-key loc_xxxxxxxxxxxxxxxxxxxx \
+  --version 2.4.0 \
+  --languages de,en,fr
+```
+
+The script uploads every requested language first and only updates the project version after all uploads succeed.
+
+
+### GitHub Action usage
+
+Set `LOCALIZE_BASE_URL` once in your workflow or repository variables, then the action step only needs the project id, API key, version, and language codes.
+
+```yml
+name: Push translations
+
+on:
+  workflow_dispatch:
+
+jobs:
+  push-translations:
+    runs-on: ubuntu-latest
+    env:
+      LOCALIZE_BASE_URL: ${{ vars.LOCALIZE_BASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: ./.github/actions/push-translations
+        with:
+          project-id: 12345678-1234-1234-1234-123456789abc
+          api-key: ${{ secrets.LOCALIZE_API_KEY }}
+          version: 2.4.0
+          language-codes: de,en,fr
+```
+
+If your files are not in one of the default folders, add `translations-dir` to the action inputs.

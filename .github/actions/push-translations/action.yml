@@ -1,0 +1,45 @@
+name: Push translations
+description: Upload translation JSON files to Localize and update the project version.
+
+inputs:
+  project-id:
+    description: Localize project id
+    required: true
+  api-key:
+    description: Localize API key with update scope
+    required: true
+  version:
+    description: Project version to set after all language uploads succeed
+    required: true
+  language-codes:
+    description: Comma-separated language codes, for example de,en,fr
+    required: true
+  base-url:
+    description: Localize base URL. Optional when LOCALIZE_BASE_URL is already set in the workflow environment.
+    required: false
+  translations-dir:
+    description: Directory containing <language>.json files. Optional, defaults to common translation folders.
+    required: false
+
+runs:
+  using: composite
+  steps:
+    - name: Push translations
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.base-url }}" ]; then
+          export LOCALIZE_BASE_URL="${{ inputs.base-url }}"
+        fi
+
+        args=(
+          --project-id "${{ inputs.project-id }}"
+          --api-key "${{ inputs.api-key }}"
+          --version "${{ inputs.version }}"
+          --languages "${{ inputs.language-codes }}"
+        )
+
+        if [ -n "${{ inputs.translations-dir }}" ]; then
+          args+=(--translations-dir "${{ inputs.translations-dir }}")
+        fi
+
+        node "${{ github.action_path }}/../../../scripts/push-translations.js" "${args[@]}"
