@@ -99,6 +99,13 @@ function getSsoCallbackUrl() {
   return `${window.location.origin}/api/auth/sso/callback`;
 }
 
+function normalizeSsoIssuerUrl(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\/+$/g, "")
+    .replace(/\/\.well-known\/openid-configuration$/i, "");
+}
+
 function languageDisplay(code, fallbackLabel) {
   const normalized = String(code || "").toLowerCase();
   const meta = languageMeta[normalized];
@@ -821,6 +828,7 @@ function LoginPage() {
 function SsoStatusPage() {
   const [searchParams] = useSearchParams();
   const reason = searchParams.get("reason") || "";
+  const detail = searchParams.get("detail") || "";
 
   let title = "SSO sign-in";
   let message = "We could not complete your SSO sign-in.";
@@ -850,6 +858,7 @@ function SsoStatusPage() {
       <div className="panel auth-card stack-form">
         <h1>{title}</h1>
         <p className="muted">{message}</p>
+        {detail ? <p className="error-text">{detail}</p> : null}
         <div>
           <Link className="secondary-button" to="/login">
             Back to sign in
@@ -3467,7 +3476,10 @@ function SsoSettingsTab() {
       const payload = await apiFetch("/api/settings/sso", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
+        body: JSON.stringify({
+          ...form,
+          issuerUrl: normalizeSsoIssuerUrl(form.issuerUrl),
+        }),
       });
       setBootstrap((current) => ({
         ...current,
@@ -3475,6 +3487,10 @@ function SsoSettingsTab() {
           ...current.settings,
           sso: payload,
         },
+      }));
+      setForm((current) => ({
+        ...current,
+        issuerUrl: payload.issuerUrl || normalizeSsoIssuerUrl(current.issuerUrl),
       }));
       showToast("success", "SSO settings saved.");
     } catch (submitError) {
@@ -3512,7 +3528,7 @@ function SsoSettingsTab() {
             <input
               value={form.issuerUrl}
               onChange={(event) => setForm((current) => ({ ...current, issuerUrl: event.target.value }))}
-              placeholder="https://identity.example.com"
+              placeholder="https://identity.example.com/realm-or-tenant"
               required={form.enabled}
             />
           </label>
@@ -3552,6 +3568,12 @@ function SsoSettingsTab() {
             <span>OAuth callback / redirect URL</span>
             <input readOnly value={callbackUrl} />
           </label>
+
+          <p className="helper-text">
+            Enter the issuer base URL only, not the
+            <code> /.well-known/openid-configuration</code> document URL. If you paste the full discovery URL, the
+            app will trim it automatically.
+          </p>
 
           <p className="helper-text">
             Register this exact URL in your OpenID Connect provider. The app starts sign-in at

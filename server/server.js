@@ -266,6 +266,25 @@ function normalizeReturnTo(value) {
   return candidate;
 }
 
+function normalizeSsoIssuerUrl(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\/+$/g, "")
+    .replace(/\/\.well-known\/openid-configuration$/i, "");
+}
+
+function redirectToSsoStatus(res, reason, detail) {
+  const params = new URLSearchParams();
+  params.set("reason", String(reason || "signin-failed"));
+
+  const normalizedDetail = String(detail || "").trim();
+  if (normalizedDetail) {
+    params.set("detail", normalizedDetail.slice(0, 300));
+  }
+
+  return res.redirect(`/sso-status?${params.toString()}`);
+}
+
 function splitClaimValues(value) {
   if (Array.isArray(value)) {
     return value.flatMap((item) => splitClaimValues(item));
@@ -611,7 +630,7 @@ async function getAppSettings(client = pool) {
 const oidcMetadataCache = new Map();
 
 async function getOidcMetadata(issuerUrl) {
-  const normalizedIssuer = String(issuerUrl || "").trim().replace(/\/+$/g, "");
+  const normalizedIssuer = normalizeSsoIssuerUrl(issuerUrl);
   if (!normalizedIssuer) {
     throw createError("The SSO issuer URL is required.", 400);
   }
@@ -622,9 +641,21 @@ async function getOidcMetadata(issuerUrl) {
   }
 
   const discoveryUrl = `${normalizedIssuer}/.well-known/openid-configuration`;
-  const response = await fetch(discoveryUrl);
+  let response;
+  try {
+    response = await fetch(discoveryUrl);
+  } catch (error) {
+    throw createError(
+      `The SSO issuer discovery document could not be loaded from ${discoveryUrl}: ${error?.message || "Network request failed."}`,
+      502,
+    );
+  }
+
   if (!response.ok) {
-    throw createError("The SSO issuer discovery document could not be loaded.", 502);
+    throw createError(
+      `The SSO issuer discovery document could not be loaded from ${discoveryUrl} (HTTP ${response.status}).`,
+      502,
+    );
   }
 
   const metadata = await response.json();
@@ -1474,11 +1505,11 @@ app.get("/api/auth/sso/start", async (req, res) => {
   try {
     const settings = await getAppSettings();
     if (!settings.sso.enabled) {
-      return res.redirect(`/sso-status?reason=${encodeURIComponent("not-configured")}`);
+      return redirectToSsoStatus(res, "not-configured");
     }
 
     if (!settings.sso.issuerUrl || !settings.sso.clientId) {
-      return res.redirect(`/sso-status?reason=${encodeURIComponent("not-configured")}`);
+      return redirectToSsoStatus(res, "not-configured");
     }
 
     const metadata = await getOidcMetadata(settings.sso.issuerUrl);
@@ -1516,7 +1547,7 @@ app.get("/api/auth/sso/start", async (req, res) => {
     return res.redirect(authorizationUrl.toString());
   } catch (error) {
     console.error(error);
-    return res.redirect(`/sso-status?reason=${encodeURIComponent("signin-failed")}`);
+    return redirectToSsoStatus(res, "signin-failed", error?.message);
   }
 });
 
@@ -1534,18 +1565,22 @@ app.get("/api/auth/sso/callback", async (req, res) => {
     clearTransactionCookie();
 
     if (!transaction || transaction.type !== "sso") {
-      return res.redirect(`/sso-status?reason=${encodeURIComponent("session-expired")}`);
+      return redirectToSsoStatus(res, "session-expired");
     }
 
     if (req.query.error) {
-      return res.redirect(`/sso-status?reason=${encodeURIComponent("signin-failed")}`);
+      return redirectToSsoStatus(
+        res,
+        "signin-failed",
+        req.query.error_description || req.query.error || "The identity provider rejected the sign-in request.",
+      );
     }
 
     const code = String(req.query.code || "").trim();
     const state = String(req.query.state || "").trim();
 
     if (!code || !state || state !== transaction.state) {
-      return res.redirect(`/sso-status?reason=${encodeURIComponent("state-mismatch")}`);
+      return redirectToSsoStatus(res, "state-mismatch");
     }
 
     const settings = await getAppSettings();
@@ -1593,7 +1628,7 @@ app.get("/api/auth/sso/callback", async (req, res) => {
       reason = "role-mapping-missing";
     }
 
-    return res.redirect(`/sso-status?reason=${encodeURIComponent(reason)}`);
+    return redirectToSsoStatus(res, reason, message);
   }
 });
 
@@ -2045,7 +2080,7 @@ app.patch("/api/settings/sso", requireRole("admin"), async (req, res, next) => {
   try {
     const enabled = Boolean(req.body.enabled);
     const provider = String(req.body.provider || "").trim();
-    const issuerUrl = String(req.body.issuerUrl || "").trim();
+    const issuerUrl = normalizeSsoIssuerUrl(req.body.issuerUrl);
     const clientId = String(req.body.clientId || "").trim();
     const clientSecret = String(req.body.clientSecret || "").trim();
     const scopes = String(req.body.scopes || "").trim();
