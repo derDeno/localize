@@ -1,4 +1,18 @@
 import { createContext, useContext, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import {
+  FiChevronDown,
+  FiChevronLeft,
+  FiDownload,
+  FiEdit2,
+  FiLogOut,
+  FiMenu,
+  FiMoon,
+  FiPlus,
+  FiSun,
+  FiUpload,
+  FiX,
+} from "react-icons/fi";
 import {
   Link,
   NavLink,
@@ -94,27 +108,43 @@ function getSystemTheme() {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
-function SunIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" className="switch-glyph">
-      <circle cx="12" cy="12" r="4.5" fill="currentColor" />
+function PasswordEyeIcon({ hidden = false }) {
+  return hidden ? (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
       <path
-        d="M12 2.5v2.5M12 19v2.5M21.5 12H19M5 12H2.5M18.7 5.3l-1.8 1.8M7.1 16.9l-1.8 1.8M18.7 18.7l-1.8-1.8M7.1 7.1 5.3 5.3"
+        d="M3 4.5 20 19.5M10.6 6.3A10.7 10.7 0 0 1 12 6.2c5.1 0 8.8 3.4 10 5.8-.5 1-1.5 2.4-2.9 3.5M6.6 9C5 10.1 3.9 11.6 3.4 12c1.2 2.4 4.9 5.8 10 5.8 1.2 0 2.3-.2 3.3-.6"
         fill="none"
         stroke="currentColor"
         strokeWidth="1.8"
         strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M9.9 11.1a3 3 0 0 0 4 4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
       />
     </svg>
-  );
-}
-
-function MoonIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" className="switch-glyph">
+  ) : (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
       <path
-        d="M14.8 3.2a8.7 8.7 0 1 0 6 14.8A9.8 9.8 0 0 1 14.8 3.2Z"
-        fill="currentColor"
+        d="M2.8 12c1.3-2.6 5.1-5.8 9.2-5.8s7.9 3.2 9.2 5.8c-1.3 2.6-5.1 5.8-9.2 5.8S4.1 14.6 2.8 12Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle
+        cx="12"
+        cy="12"
+        r="2.8"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
       />
     </svg>
   );
@@ -151,7 +181,7 @@ function FlagSelect({ label, value, options, onChange }) {
             )}
           </span>
           <span className="flag-select-chevron" aria-hidden="true">
-            ▾
+            <FiChevronDown />
           </span>
         </summary>
 
@@ -176,6 +206,14 @@ function FlagSelect({ label, value, options, onChange }) {
       </details>
     </label>
   );
+}
+
+function DialogPortal({ children }) {
+  if (typeof document === "undefined") {
+    return null;
+  }
+
+  return createPortal(children, document.body);
 }
 
 function AppProvider({ children }) {
@@ -245,7 +283,6 @@ function LoadingPage({ text = "Loading…" }) {
   return (
     <div className="screen-center">
       <div className="panel narrow-panel">
-        <p className="eyebrow">localize</p>
         <h1>{text}</h1>
       </div>
     </div>
@@ -490,17 +527,17 @@ function AppShell() {
               }}
             >
               <span className="switch-icon switch-icon-sun" aria-hidden="true">
-                <SunIcon />
+                <FiSun className="switch-glyph" />
               </span>
               <span className="switch-thumb" />
               <span className="switch-icon switch-icon-moon" aria-hidden="true">
-                <MoonIcon />
+                <FiMoon className="switch-glyph" />
               </span>
             </button>
           </label>
 
           <button className="icon-button danger-icon-button" type="button" aria-label="Sign out" onClick={handleLogout}>
-            ⏻
+            <FiLogOut />
           </button>
         </div>
       </header>
@@ -518,7 +555,7 @@ function AppShell() {
           aria-label="Back to top"
           onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
         >
-          ‹
+          <FiChevronLeft />
         </button>
       ) : null}
 
@@ -539,7 +576,7 @@ function AppShell() {
                 aria-label="Close dialog"
                 onClick={closeCreateDialog}
               >
-                ×
+                <FiX />
               </button>
             </div>
 
@@ -948,7 +985,7 @@ function DashboardPage() {
         {roleAllows(user, "editor") ? (
           <button className="primary-button" type="button" onClick={openCreateDialog}>
             <span className="button-icon" aria-hidden="true">
-              ＋
+              <FiPlus />
             </span>
             Create project
           </button>
@@ -1304,7 +1341,7 @@ function ProjectPage() {
                       aria-label="Edit project details"
                       onClick={openEditProjectDialog}
                     >
-                      ✎
+                      <FiEdit2 />
                     </button>
                   ) : null}
                 </div>
@@ -1330,14 +1367,14 @@ function ProjectPage() {
                 disabled={!availableLanguages.length}
               >
                 <span className="button-icon" aria-hidden="true">
-                  ＋
+                  <FiPlus />
                 </span>
                 Add language
               </button>
             ) : null}
             <a className="secondary-button" href={`/api/projects/${project.id}/download-all`}>
               <span className="button-icon" aria-hidden="true">
-                ⭳
+                <FiDownload />
               </span>
               Download all
             </a>
@@ -1390,7 +1427,7 @@ function ProjectPage() {
                   <div className="card-actions">
                     <Link className="primary-button" to={`/projects/${project.id}/languages/${language.code}/edit`}>
                       <span className="button-icon" aria-hidden="true">
-                        ✎
+                        <FiEdit2 />
                       </span>
                       Edit
                     </Link>
@@ -1400,7 +1437,7 @@ function ProjectPage() {
                       aria-label={`Open actions for ${display.label}`}
                       onClick={() => setLanguageActionMenu(language)}
                     >
-                      ⋯
+                      <FiMenu />
                     </button>
                   </div>
                 </article>
@@ -1418,7 +1455,7 @@ function ProjectPage() {
                 <h2>Add language</h2>
               </div>
               <button className="dialog-close" type="button" aria-label="Close dialog" onClick={closeCreateLanguageDialog}>
-                ×
+                <FiX />
               </button>
             </div>
 
@@ -1479,7 +1516,7 @@ function ProjectPage() {
                 <h2>Edit project</h2>
               </div>
               <button className="dialog-close" type="button" aria-label="Close dialog" onClick={closeEditProjectDialog}>
-                ×
+                <FiX />
               </button>
             </div>
 
@@ -1581,7 +1618,7 @@ function ProjectPage() {
                 <h2>Delete project</h2>
               </div>
               <button className="dialog-close" type="button" aria-label="Close dialog" onClick={closeDeleteProjectDialog}>
-                ×
+                <FiX />
               </button>
             </div>
 
@@ -1611,7 +1648,7 @@ function ProjectPage() {
                 <h2>Delete language</h2>
               </div>
               <button className="dialog-close" type="button" aria-label="Close dialog" onClick={closeDeleteLanguageDialog}>
-                ×
+                <FiX />
               </button>
             </div>
 
@@ -1642,7 +1679,7 @@ function ProjectPage() {
                 <h2>{languageDisplay(languageActionMenu.code, languageActionMenu.label).label}</h2>
               </div>
               <button className="dialog-close" type="button" aria-label="Close dialog" onClick={closeLanguageActionMenu}>
-                ×
+                <FiX />
               </button>
             </div>
 
@@ -1653,7 +1690,7 @@ function ProjectPage() {
                 onClick={closeLanguageActionMenu}
               >
                 <span className="button-icon" aria-hidden="true">
-                  ⭳
+                  <FiDownload />
                 </span>
                 Download
               </a>
@@ -1669,7 +1706,7 @@ function ProjectPage() {
                     }}
                   />
                   <span className="button-icon" aria-hidden="true">
-                    ⭱
+                    <FiUpload />
                   </span>
                   {uploadingLanguageCode === languageActionMenu.code ? "Uploading..." : "Upload"}
                 </label>
@@ -1685,7 +1722,7 @@ function ProjectPage() {
                   }}
                 >
                   <span className="button-icon" aria-hidden="true">
-                    ×
+                    <FiX />
                   </span>
                   Delete
                 </button>
@@ -1830,10 +1867,9 @@ function EditorPage() {
     <section className="panel editor-panel">
       <div className="editor-header">
         <div>
-          <p className="eyebrow">Translation editor</p>
           <h2 className="editor-title">
             <Link className="back-link" to={`/projects/${project.id}`}>
-              ‹
+              <FiChevronLeft />
             </Link>
             <span className="editor-title-text">
               <Flag code={editorLanguage.code} label={editorLanguage.label} className="editor-flag" />{" "}
@@ -1849,7 +1885,7 @@ function EditorPage() {
         {roleAllows(user, "editor") ? (
           <button className="primary-button" disabled={busy} type="button" onClick={handleSaveTranslations}>
             <span className="button-icon" aria-hidden="true">
-              ✎
+              <FiEdit2 />
             </span>
             {busy ? "Saving..." : "Save progress"}
           </button>
@@ -1904,48 +1940,76 @@ function EditorPage() {
 function SettingsPage() {
   const { user } = useApp();
   const isAdmin = roleAllows(user, "admin");
-  const [tab, setTab] = useState("profile");
+  const { tab } = useParams();
+  const allowedTabs = isAdmin ? ["profile", "users", "app", "sso"] : ["profile"];
+  const activeTab = allowedTabs.includes(tab) ? tab : "profile";
 
-  useEffect(() => {
-    if (!isAdmin && tab !== "profile") {
-      setTab("profile");
-    }
-  }, [isAdmin, tab]);
+  if (!tab) {
+    return <Navigate to="/settings/profile" replace />;
+  }
+
+  if (tab !== activeTab) {
+    return <Navigate to={`/settings/${activeTab}`} replace />;
+  }
 
   return (
     <main className="page-stack">
-      <section className="panel page-hero">
+      <section className="page-stack">
         <div>
           <h2>Settings</h2>
         </div>
       </section>
 
-      <div className="tab-row settings-tabbar">
-        <button className={tab === "profile" ? "tab-button active" : "tab-button"} onClick={() => setTab("profile")}>
+      <div className="settings-tabbar" role="tablist" aria-label="Settings sections">
+        <NavLink
+          className={({ isActive }) => (isActive ? "tab-button active" : "tab-button")}
+          to="/settings/profile"
+          role="tab"
+          aria-selected={activeTab === "profile"}
+          aria-controls="settings-panel"
+        >
           Profile
-        </button>
+        </NavLink>
         {isAdmin ? (
-          <button className={tab === "users" ? "tab-button active" : "tab-button"} onClick={() => setTab("users")}>
+          <NavLink
+            className={({ isActive }) => (isActive ? "tab-button active" : "tab-button")}
+            to="/settings/users"
+            role="tab"
+            aria-selected={activeTab === "users"}
+            aria-controls="settings-panel"
+          >
             Users
-          </button>
+          </NavLink>
         ) : null}
         {isAdmin ? (
-          <button className={tab === "app" ? "tab-button active" : "tab-button"} onClick={() => setTab("app")}>
-            App settings
-          </button>
+          <NavLink
+            className={({ isActive }) => (isActive ? "tab-button active" : "tab-button")}
+            to="/settings/app"
+            role="tab"
+            aria-selected={activeTab === "app"}
+            aria-controls="settings-panel"
+          >
+            System
+          </NavLink>
         ) : null}
         {isAdmin ? (
-          <button className={tab === "sso" ? "tab-button active" : "tab-button"} onClick={() => setTab("sso")}>
+          <NavLink
+            className={({ isActive }) => (isActive ? "tab-button active" : "tab-button")}
+            to="/settings/sso"
+            role="tab"
+            aria-selected={activeTab === "sso"}
+            aria-controls="settings-panel"
+          >
             SSO
-          </button>
+          </NavLink>
         ) : null}
       </div>
 
-      <section className="panel page-stack">
-        {tab === "profile" ? <ProfileTab /> : null}
-        {isAdmin && tab === "users" ? <UsersTab /> : null}
-        {isAdmin && tab === "app" ? <AppSettingsTab /> : null}
-        {isAdmin && tab === "sso" ? <SsoSettingsTab /> : null}
+      <section className="panel page-stack" id="settings-panel" role="tabpanel" aria-label={`${activeTab} settings`}>
+        {activeTab === "profile" ? <ProfileTab /> : null}
+        {isAdmin && activeTab === "users" ? <UsersTab /> : null}
+        {isAdmin && activeTab === "app" ? <AppSettingsTab /> : null}
+        {isAdmin && activeTab === "sso" ? <SsoSettingsTab /> : null}
       </section>
     </main>
   );
@@ -1957,6 +2021,11 @@ function ProfileTab() {
     currentPassword: "",
     newPassword: "",
     confirmPassword: "",
+  });
+  const [visiblePasswords, setVisiblePasswords] = useState({
+    currentPassword: false,
+    newPassword: false,
+    confirmPassword: false,
   });
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -2025,10 +2094,6 @@ function ProfileTab() {
           <span>Role</span>
           <input value={user?.role || ""} readOnly />
         </label>
-        <label>
-          <span>Status</span>
-          <input value={user?.status || ""} readOnly />
-        </label>
       </div>
 
       <form className="stack-form profile-password-form" onSubmit={handleSubmit}>
@@ -2036,34 +2101,85 @@ function ProfileTab() {
           <h3>Change password</h3>
         </div>
 
-        <label>
-          <span>Current password</span>
-          <input
-            type="password"
-            value={form.currentPassword}
-            onChange={(event) => setForm((current) => ({ ...current, currentPassword: event.target.value }))}
-            required
-          />
-        </label>
+        <div className="split-grid">
+          <label>
+            <span>Current password</span>
+            <div className="password-field">
+              <input
+                type={visiblePasswords.currentPassword ? "text" : "password"}
+                value={form.currentPassword}
+                onChange={(event) => setForm((current) => ({ ...current, currentPassword: event.target.value }))}
+                required
+              />
+              <button
+                className="password-toggle"
+                type="button"
+                onClick={() =>
+                  setVisiblePasswords((current) => ({
+                    ...current,
+                    currentPassword: !current.currentPassword,
+                  }))
+                }
+                aria-label={visiblePasswords.currentPassword ? "Hide current password" : "Show current password"}
+                aria-pressed={visiblePasswords.currentPassword}
+              >
+                <PasswordEyeIcon hidden={visiblePasswords.currentPassword} />
+              </button>
+            </div>
+          </label>
+          <div aria-hidden="true" />
+        </div>
 
         <div className="split-grid">
           <label>
             <span>New password</span>
-            <input
-              type="password"
-              value={form.newPassword}
-              onChange={(event) => setForm((current) => ({ ...current, newPassword: event.target.value }))}
-              required
-            />
+            <div className="password-field">
+              <input
+                type={visiblePasswords.newPassword ? "text" : "password"}
+                value={form.newPassword}
+                onChange={(event) => setForm((current) => ({ ...current, newPassword: event.target.value }))}
+                required
+              />
+              <button
+                className="password-toggle"
+                type="button"
+                onClick={() =>
+                  setVisiblePasswords((current) => ({
+                    ...current,
+                    newPassword: !current.newPassword,
+                  }))
+                }
+                aria-label={visiblePasswords.newPassword ? "Hide new password" : "Show new password"}
+                aria-pressed={visiblePasswords.newPassword}
+              >
+                <PasswordEyeIcon hidden={visiblePasswords.newPassword} />
+              </button>
+            </div>
           </label>
           <label>
             <span>Confirm new password</span>
-            <input
-              type="password"
-              value={form.confirmPassword}
-              onChange={(event) => setForm((current) => ({ ...current, confirmPassword: event.target.value }))}
-              required
-            />
+            <div className="password-field">
+              <input
+                type={visiblePasswords.confirmPassword ? "text" : "password"}
+                value={form.confirmPassword}
+                onChange={(event) => setForm((current) => ({ ...current, confirmPassword: event.target.value }))}
+                required
+              />
+              <button
+                className="password-toggle"
+                type="button"
+                onClick={() =>
+                  setVisiblePasswords((current) => ({
+                    ...current,
+                    confirmPassword: !current.confirmPassword,
+                  }))
+                }
+                aria-label={visiblePasswords.confirmPassword ? "Hide confirmed password" : "Show confirmed password"}
+                aria-pressed={visiblePasswords.confirmPassword}
+              >
+                <PasswordEyeIcon hidden={visiblePasswords.confirmPassword} />
+              </button>
+            </div>
           </label>
         </div>
 
@@ -2313,12 +2429,11 @@ function UsersTab() {
       <section className="page-stack">
         <div className="section-head">
           <div>
-            <p className="eyebrow">Directory</p>
             <h3>Users</h3>
           </div>
           <button className="primary-button" type="button" onClick={openCreateUserDialog}>
             <span className="button-icon" aria-hidden="true">
-              ＋
+              <FiPlus />
             </span>
             Add user
           </button>
@@ -2352,7 +2467,7 @@ function UsersTab() {
                       aria-label={`Open actions for ${user.firstName} ${user.lastName}`}
                       onClick={() => openActionMenu(user)}
                     >
-                      ⋯
+                      <FiMenu />
                     </button>
                   </td>
                 </tr>
@@ -2363,14 +2478,15 @@ function UsersTab() {
       </section>
 
       {isUserDialogOpen ? (
-        <div className="dialog-backdrop">
-          <div className="dialog panel dialog-compact" onClick={(event) => event.stopPropagation()}>
+        <DialogPortal>
+          <div className="dialog-backdrop">
+            <div className="dialog panel dialog-compact" onClick={(event) => event.stopPropagation()}>
             <div className="dialog-header">
               <div>
                 <h2>{selectedUserId ? "Edit user" : "Add user"}</h2>
               </div>
               <button className="dialog-close" type="button" aria-label="Close dialog" onClick={closeUserDialog}>
-                ×
+                <FiX />
               </button>
             </div>
 
@@ -2451,13 +2567,15 @@ function UsersTab() {
                 </button>
               </div>
             </form>
+            </div>
           </div>
-        </div>
+        </DialogPortal>
       ) : null}
 
       {actionUser ? (
-        <div className="dialog-backdrop">
-          <div className="dialog panel dialog-compact" onClick={(event) => event.stopPropagation()}>
+        <DialogPortal>
+          <div className="dialog-backdrop">
+            <div className="dialog panel dialog-compact" onClick={(event) => event.stopPropagation()}>
             <div className="dialog-header">
               <div>
                 <h2>
@@ -2465,7 +2583,7 @@ function UsersTab() {
                 </h2>
               </div>
               <button className="dialog-close" type="button" aria-label="Close dialog" onClick={closeActionMenu}>
-                ×
+                <FiX />
               </button>
             </div>
 
@@ -2473,32 +2591,25 @@ function UsersTab() {
               <button className="secondary-button" type="button" onClick={() => fillFromUser(actionUser)}>
                 Edit
               </button>
-              <button className="secondary-button" type="button" onClick={openResetPasswordDialog}>
-                Reset pw
-              </button>
-              <button className="secondary-button" type="button" onClick={openRoleDialog}>
-                Change role
-              </button>
-              <button className="secondary-button" type="button" onClick={handleDeactivateUser} disabled={submitting}>
-                Deactivate
-              </button>
               <button className="danger-button" type="button" onClick={openDeleteDialog}>
                 Delete
               </button>
             </div>
+            </div>
           </div>
-        </div>
+        </DialogPortal>
       ) : null}
 
       {isResetPasswordOpen ? (
-        <div className="dialog-backdrop">
-          <div className="dialog panel dialog-compact" onClick={(event) => event.stopPropagation()}>
+        <DialogPortal>
+          <div className="dialog-backdrop">
+            <div className="dialog panel dialog-compact" onClick={(event) => event.stopPropagation()}>
             <div className="dialog-header">
               <div>
                 <h2>Reset password</h2>
               </div>
               <button className="dialog-close" type="button" aria-label="Close dialog" onClick={closeResetPasswordDialog}>
-                ×
+                <FiX />
               </button>
             </div>
 
@@ -2523,19 +2634,21 @@ function UsersTab() {
                 </button>
               </div>
             </div>
+            </div>
           </div>
-        </div>
+        </DialogPortal>
       ) : null}
 
       {isRoleDialogOpen ? (
-        <div className="dialog-backdrop">
-          <div className="dialog panel dialog-compact" onClick={(event) => event.stopPropagation()}>
+        <DialogPortal>
+          <div className="dialog-backdrop">
+            <div className="dialog panel dialog-compact" onClick={(event) => event.stopPropagation()}>
             <div className="dialog-header">
               <div>
                 <h2>Change role</h2>
               </div>
               <button className="dialog-close" type="button" aria-label="Close dialog" onClick={closeRoleDialog}>
-                ×
+                <FiX />
               </button>
             </div>
 
@@ -2560,19 +2673,21 @@ function UsersTab() {
                 </button>
               </div>
             </div>
+            </div>
           </div>
-        </div>
+        </DialogPortal>
       ) : null}
 
       {isDeleteDialogOpen ? (
-        <div className="dialog-backdrop">
-          <div className="dialog panel dialog-compact" onClick={(event) => event.stopPropagation()}>
+        <DialogPortal>
+          <div className="dialog-backdrop">
+            <div className="dialog panel dialog-compact" onClick={(event) => event.stopPropagation()}>
             <div className="dialog-header">
               <div>
                 <h2>Delete user</h2>
               </div>
               <button className="dialog-close" type="button" aria-label="Close dialog" onClick={closeDeleteDialog}>
-                ×
+                <FiX />
               </button>
             </div>
 
@@ -2592,8 +2707,9 @@ function UsersTab() {
                 {submitting ? "Deleting..." : "Delete"}
               </button>
             </div>
+            </div>
           </div>
-        </div>
+        </DialogPortal>
       ) : null}
     </>
   );
@@ -2630,7 +2746,7 @@ function AppSettingsTab() {
   }
 
   return (
-    <form className="stack-form" onSubmit={handleSubmit}>
+    <form className="stack-form app-settings-form" onSubmit={handleSubmit}>
       <label className="toggle-row">
         <input
           type="checkbox"
@@ -2657,10 +2773,6 @@ function AppSettingsTab() {
         />
         <span>Allow language deletion</span>
       </label>
-
-      <p className="muted">
-        Improvement idea: next we can split these into global policies and per-project overrides for safer workflows.
-      </p>
 
       {message ? <p className="success-text">{message}</p> : null}
 
@@ -2727,7 +2839,7 @@ function SsoSettingsTab() {
   }
 
   return (
-    <form className="stack-form" onSubmit={handleSubmit}>
+    <form className="stack-form sso-settings-form" onSubmit={handleSubmit}>
       <label className="toggle-row">
         <input
           type="checkbox"
@@ -2737,176 +2849,181 @@ function SsoSettingsTab() {
         <span>Enable SSO configuration</span>
       </label>
 
-      <label className="toggle-row">
-        <input
-          type="checkbox"
-          checked={form.passwordLoginEnabled}
-          onChange={(event) =>
-            setForm((current) => ({ ...current, passwordLoginEnabled: event.target.checked }))
-          }
-        />
-        <span>Allow login with email and password</span>
-      </label>
-
-      <label className="toggle-row">
-        <input
-          type="checkbox"
-          checked={form.autoProvisionEnabled}
-          onChange={(event) =>
-            setForm((current) => ({ ...current, autoProvisionEnabled: event.target.checked }))
-          }
-        />
-        <span>Auto provision new users on first login</span>
-      </label>
-
-      <label>
-        <span>Provider</span>
-        <input
-          value={form.provider}
-          onChange={(event) => setForm((current) => ({ ...current, provider: event.target.value }))}
-          placeholder="Azure AD, Keycloak, Okta…"
-        />
-      </label>
-
-      <label>
-        <span>Issuer URL</span>
-        <input
-          value={form.issuerUrl}
-          onChange={(event) => setForm((current) => ({ ...current, issuerUrl: event.target.value }))}
-          placeholder="https://identity.example.com"
-        />
-      </label>
-
-      <div className="split-grid">
-        <label>
-          <span>Client ID</span>
-          <input
-            value={form.clientId}
-            onChange={(event) => setForm((current) => ({ ...current, clientId: event.target.value }))}
-          />
-        </label>
-
-        <label>
-          <span>Client secret</span>
-          <input
-            value={form.clientSecret}
-            onChange={(event) => setForm((current) => ({ ...current, clientSecret: event.target.value }))}
-          />
-        </label>
-      </div>
-
-      {form.autoProvisionEnabled ? (
+      {form.enabled ? (
         <>
           <label>
-            <span>Provisioning role assignment</span>
-            <select
-              value={form.autoProvisionRoleMode}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  autoProvisionRoleMode: event.target.value === "identity_mapping" ? "identity_mapping" : "default_role",
-                }))
-              }
-            >
-              <option value="default_role">Default user role</option>
-              <option value="identity_mapping">Identity group mapping</option>
-            </select>
+            <span>Provider</span>
+            <input
+              value={form.provider}
+              onChange={(event) => setForm((current) => ({ ...current, provider: event.target.value }))}
+              placeholder="Azure AD, Keycloak, Okta…"
+            />
           </label>
 
-          {form.autoProvisionRoleMode === "default_role" ? (
+          <label>
+            <span>Issuer URL</span>
+            <input
+              value={form.issuerUrl}
+              onChange={(event) => setForm((current) => ({ ...current, issuerUrl: event.target.value }))}
+              placeholder="https://identity.example.com"
+            />
+          </label>
+
+          <div className="split-grid">
             <label>
-              <span>Default role for new users</span>
-              <select
-                value={form.autoProvisionDefaultRole}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    autoProvisionDefaultRole: ["admin", "editor", "viewer"].includes(event.target.value)
-                      ? event.target.value
-                      : "viewer",
-                  }))
-                }
-              >
-                <option value="admin">Admin</option>
-                <option value="editor">Editor</option>
-                <option value="viewer">Viewer</option>
-              </select>
+              <span>Client ID</span>
+              <input
+                value={form.clientId}
+                onChange={(event) => setForm((current) => ({ ...current, clientId: event.target.value }))}
+              />
             </label>
-          ) : (
+
+            <label>
+              <span>Client secret</span>
+              <input
+                value={form.clientSecret}
+                onChange={(event) => setForm((current) => ({ ...current, clientSecret: event.target.value }))}
+              />
+            </label>
+          </div>
+
+          <label className="toggle-row">
+            <input
+              type="checkbox"
+              checked={form.passwordLoginEnabled}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, passwordLoginEnabled: event.target.checked }))
+              }
+            />
+            <span>Allow login with email and password</span>
+          </label>
+
+          <label className="toggle-row">
+            <input
+              type="checkbox"
+              checked={form.autoProvisionEnabled}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, autoProvisionEnabled: event.target.checked }))
+              }
+            />
+            <span>Auto provision new users on first login</span>
+          </label>
+
+          {form.autoProvisionEnabled ? (
             <>
               <label>
-                <span>Role sync timing</span>
+                <span>Provisioning role assignment</span>
                 <select
-                  value={form.roleSyncMode}
+                  value={form.autoProvisionRoleMode}
                   onChange={(event) =>
                     setForm((current) => ({
                       ...current,
-                      roleSyncMode: event.target.value === "each_login" ? "each_login" : "first_login",
+                      autoProvisionRoleMode:
+                        event.target.value === "identity_mapping" ? "identity_mapping" : "default_role",
                     }))
                   }
                 >
-                  <option value="first_login">Only on first login</option>
-                  <option value="each_login">On each login</option>
+                  <option value="default_role">Default user role</option>
+                  <option value="identity_mapping">Identity group mapping</option>
                 </select>
               </label>
 
-              <p className="helper-text">
-                New users will receive their role from the identity group mappings below.
-              </p>
-              <div className="split-grid">
+              {form.autoProvisionRoleMode === "default_role" ? (
                 <label>
-                  <span>Admin group</span>
-                  <input
-                    value={form.roleMappings.admin}
+                  <span>Default role for new users</span>
+                  <select
+                    value={form.autoProvisionDefaultRole}
                     onChange={(event) =>
                       setForm((current) => ({
                         ...current,
-                        roleMappings: {
-                          ...current.roleMappings,
-                          admin: event.target.value,
-                        },
+                        autoProvisionDefaultRole: ["admin", "editor", "viewer"].includes(event.target.value)
+                          ? event.target.value
+                          : "viewer",
                       }))
                     }
-                    placeholder="localize-admins"
-                  />
+                  >
+                    <option value="admin">Admin</option>
+                    <option value="editor">Editor</option>
+                    <option value="viewer">Viewer</option>
+                  </select>
                 </label>
+              ) : (
+                <>
+                  <label>
+                    <span>Role sync timing</span>
+                    <select
+                      value={form.roleSyncMode}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          roleSyncMode: event.target.value === "each_login" ? "each_login" : "first_login",
+                        }))
+                      }
+                    >
+                      <option value="first_login">Only on first login</option>
+                      <option value="each_login">On each login</option>
+                    </select>
+                  </label>
 
-                <label>
-                  <span>Editor group</span>
-                  <input
-                    value={form.roleMappings.editor}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        roleMappings: {
-                          ...current.roleMappings,
-                          editor: event.target.value,
-                        },
-                      }))
-                    }
-                    placeholder="localize-editors"
-                  />
-                </label>
-              </div>
+                  <p className="helper-text">
+                    New users will receive their role from the identity group mappings below.
+                  </p>
+                  <div className="split-grid">
+                    <label>
+                      <span>Admin group</span>
+                      <input
+                        value={form.roleMappings.admin}
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            roleMappings: {
+                              ...current.roleMappings,
+                              admin: event.target.value,
+                            },
+                          }))
+                        }
+                        placeholder="localize-admins"
+                      />
+                    </label>
 
-              <label>
-                <span>Viewer group</span>
-                <input
-                  value={form.roleMappings.viewer}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      roleMappings: {
-                        ...current.roleMappings,
-                        viewer: event.target.value,
-                      },
-                    }))
-                  }
-                  placeholder="localize-viewers"
-                />
-              </label>
+                    <label>
+                      <span>Editor group</span>
+                      <input
+                        value={form.roleMappings.editor}
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            roleMappings: {
+                              ...current.roleMappings,
+                              editor: event.target.value,
+                            },
+                          }))
+                        }
+                        placeholder="localize-editors"
+                      />
+                    </label>
+                  </div>
+
+                  <label>
+                    <span>Viewer group</span>
+                    <input
+                      value={form.roleMappings.viewer}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          roleMappings: {
+                            ...current.roleMappings,
+                            viewer: event.target.value,
+                          },
+                        }))
+                      }
+                      placeholder="localize-viewers"
+                    />
+                  </label>
+                </>
+              )}
             </>
-          )}
+          ) : null}
         </>
       ) : null}
 
@@ -2933,7 +3050,7 @@ const router = createBrowserRouter(
           <Route path="/" element={<DashboardPage />} />
           <Route path="/projects/:projectId" element={<ProjectPage />} />
           <Route path="/projects/:projectId/languages/:languageCode/edit" element={<EditorPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/settings/:tab?" element={<SettingsPage />} />
         </Route>
       </Route>
 

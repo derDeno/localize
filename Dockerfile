@@ -1,11 +1,26 @@
-FROM node:24-bookworm-slim AS build
+FROM node:24-bookworm-slim AS base
 WORKDIR /app
 
 COPY package*.json ./
 RUN npm ci
 
+FROM base AS build
+
 COPY . .
 RUN npm run build
+
+FROM base AS development
+WORKDIR /app
+
+ENV NODE_ENV=development
+ENV PORT=3001
+ENV POSTGRES_HOST=postgres
+ENV POSTGRES_PORT=5432
+ENV POSTGRES_DB=localize
+ENV POSTGRES_USER=localize
+ENV POSTGRES_PASSWORD=localize
+
+COPY . .
 
 FROM node:24-bookworm-slim AS runtime
 WORKDIR /app

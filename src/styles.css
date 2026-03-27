@@ -87,11 +87,6 @@ a {
   transition: transform 160ms ease, opacity 160ms ease, background 160ms ease;
 }
 
-button:hover,
-a:hover {
-  transform: translateY(-1px);
-}
-
 a {
   color: inherit;
   text-decoration: none;
@@ -141,13 +136,13 @@ textarea {
 input[type="checkbox"] {
   appearance: none;
   -webkit-appearance: none;
-  width: 1.35rem;
-  height: 1.35rem;
-  border-radius: 0.45rem;
+  width: 0.2rem;
+  height: 0.2rem;
+  border-radius: 0.24rem;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.04);
-  display: inline-grid;
-  place-items: center;
+  display: inline-block;
+  position: relative;
   cursor: pointer;
   flex-shrink: 0;
   margin: 0;
@@ -156,27 +151,31 @@ input[type="checkbox"] {
 
 input[type="checkbox"]::after {
   content: "";
-  width: 0.38rem;
-  height: 0.72rem;
-  border-right: 0.16rem solid transparent;
-  border-bottom: 0.16rem solid transparent;
-  transform: rotate(45deg) scale(0);
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0.2rem;
+  height: 0.39rem;
+  border-right: 0.1rem solid transparent;
+  border-bottom: 0.1rem solid transparent;
+  transform: translate(-50%, -56%) rotate(45deg) scale(0);
+  transform-origin: center;
   transition: transform 160ms ease, border-color 160ms ease;
 }
 
 input[type="checkbox"]:checked {
   background: linear-gradient(135deg, var(--accent) 0%, #ffb44d 100%);
   border-color: rgba(240, 138, 36, 0.72);
-  box-shadow: 0 0 0 4px rgba(240, 138, 36, 0.14);
+  box-shadow: 0 0 0 2px rgba(240, 138, 36, 0.1);
 }
 
 input[type="checkbox"]:checked::after {
   border-color: var(--accent-contrast);
-  transform: rotate(45deg) scale(1);
+  transform: translate(-50%, -56%) rotate(45deg) scale(1);
 }
 
 input[type="checkbox"]:focus-visible {
-  box-shadow: 0 0 0 4px rgba(240, 138, 36, 0.18);
+  box-shadow: 0 0 0 2px rgba(240, 138, 36, 0.14);
 }
 
 .app-shell {
@@ -208,7 +207,64 @@ input[type="checkbox"]:focus-visible {
 }
 
 .profile-password-form {
-  margin-top: 4px;
+  margin-top: 20px;
+}
+
+.password-field {
+  position: relative;
+}
+
+.password-field input {
+  min-width: 0;
+  padding-right: 54px;
+}
+
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 160ms ease, background 160ms ease;
+}
+
+.password-toggle svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+  overflow: visible;
+}
+
+.password-toggle:hover,
+.password-toggle:focus-visible {
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg-soft) 88%, transparent);
+  outline: none;
+}
+
+.password-toggle:hover {
+  transform: translateY(-50%);
+}
+
+.app-settings-form .primary-button {
+  justify-self: flex-start;
+  width: auto;
+}
+
+.sso-settings-form .primary-button {
+  justify-self: flex-start;
+  width: auto;
 }
 
 .cards-grid {
@@ -342,14 +398,6 @@ input[type="checkbox"]:focus-visible {
   width: 58px;
   height: 58px;
   filter: drop-shadow(0 10px 24px rgba(240, 138, 36, 0.3));
-}
-
-.eyebrow {
-  margin: 0 0 6px;
-  color: var(--accent);
-  font-size: 0.8rem;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
 }
 
 .panel {
@@ -537,6 +585,61 @@ input[type="checkbox"]:focus-visible {
 
 .settings-tabbar {
   margin-top: -4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(14px);
+}
+
+.settings-tabbar .tab-button {
+  position: relative;
+  min-height: 44px;
+  padding: 6px 0;
+  margin-inline: 10px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 700;
+  border-radius: 0;
+}
+
+.settings-tabbar .tab-button::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -4px;
+  height: 2px;
+  border-radius: 999px;
+  background: transparent;
+  transform: scaleX(0);
+  transform-origin: center;
+  transition: transform 160ms ease, background 160ms ease;
+}
+
+.settings-tabbar .tab-button:hover,
+.settings-tabbar .tab-button:focus-visible {
+  color: var(--text);
+  background: transparent;
+  outline: none;
+}
+
+.settings-tabbar .tab-button.active {
+  color: var(--accent);
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.settings-tabbar .tab-button.active::after {
+  background: var(--accent);
+  transform: scaleX(1);
 }
 
 .primary-button:disabled,
@@ -671,6 +774,10 @@ input[type="checkbox"]:focus-visible {
   width: 18px;
   height: 18px;
   display: block;
+}
+
+.switch-icon-sun .switch-glyph {
+  transform: translateX(-2px);
 }
 
 .switch-icon-sun {
@@ -1092,11 +1199,11 @@ input[type="checkbox"]:focus-visible {
 .toggle-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 
 .toggle-row input {
-  width: 1.35rem;
+  width: 0.86rem;
 }
 
 .editor-row {
