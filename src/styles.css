@@ -162,6 +162,34 @@ input[type="checkbox"]:hover {
   margin: 0 auto;
 }
 
+.github-footer {
+  margin-top: 28px;
+  padding: 18px 0 8px;
+  display: flex;
+  justify-content: center;
+}
+
+.github-footer-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  text-decoration: none;
+  font-weight: 600;
+  transition: color 160ms ease, transform 160ms ease;
+}
+
+.github-footer-link:hover,
+.github-footer-link:focus-visible {
+  color: var(--text);
+  transform: translateY(-1px);
+}
+
+.github-footer-link svg {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
 .page-shell,
 .page-stack,
 .cards-grid,

@@ -5,6 +5,7 @@ import {
   FiChevronLeft,
   FiDownload,
   FiEdit2,
+  FiGithub,
   FiLogOut,
   FiMoreHorizontal,
   FiMoon,
@@ -356,6 +357,7 @@ function RequireRole({ role }) {
 function AppShell() {
   const navigate = useNavigate();
   const { user, setBootstrap } = useApp();
+  const isAdmin = roleAllows(user, "admin");
   const [themePreference, setThemePreference] = useState(() => localStorage.getItem("localize-theme"));
   const [systemTheme, setSystemTheme] = useState(getSystemTheme);
   const [toast, setToast] = useState(null);
@@ -596,6 +598,20 @@ function AppShell() {
       <main className="page-shell">
         <Outlet context={{ refreshSeed, openCreateDialog, showToast }} />
       </main>
+
+      {!isAdmin ? (
+        <footer className="github-footer">
+          <a
+            className="github-footer-link"
+            href="https://github.com/derDeno/localize"
+            target="_blank"
+            rel="noreferrer"
+          >
+            <FiGithub aria-hidden="true" />
+            <span>Star this project on GitHub</span>
+          </a>
+        </footer>
+      ) : null}
 
       {isCreateDialogOpen ? (
         <div className="dialog-backdrop">
