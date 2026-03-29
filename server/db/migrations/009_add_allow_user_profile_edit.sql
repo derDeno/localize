@@ -1,0 +1,2 @@
+ALTER TABLE app_settings
+  ADD COLUMN IF NOT EXISTS allow_user_profile_edit BOOLEAN NOT NULL DEFAULT TRUE;

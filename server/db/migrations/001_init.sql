@@ -18,6 +18,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique_idx
 CREATE TABLE IF NOT EXISTS app_settings (
   id BOOLEAN PRIMARY KEY DEFAULT TRUE,
   allow_registration BOOLEAN NOT NULL DEFAULT TRUE,
+  allow_user_profile_edit BOOLEAN NOT NULL DEFAULT TRUE,
   allow_project_delete BOOLEAN NOT NULL DEFAULT TRUE,
   allow_language_delete BOOLEAN NOT NULL DEFAULT TRUE,
   sso_enabled BOOLEAN NOT NULL DEFAULT FALSE,

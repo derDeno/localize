@@ -340,11 +340,10 @@ function getUserNamesFromClaims(claims) {
 
   const fullName = String(claims?.name || "").trim();
   if (fullName) {
-    const parts = fullName.split(/\s+/).filter(Boolean);
-    return {
-      firstName: parts[0] || "SSO",
-      lastName: parts.slice(1).join(" ") || "User",
-    };
+    return getUserNamesFromFullName(
+      fullName,
+      String(claims?.email || claims?.preferred_username || claims?.upn || "").trim(),
+    );
   }
 
   const email = String(claims?.email || claims?.preferred_username || claims?.upn || "").trim();
@@ -358,6 +357,62 @@ function getUserNamesFromClaims(claims) {
   return {
     firstName: "SSO",
     lastName: "User",
+  };
+}
+
+function getUserNamesFromFullName(fullName, email) {
+  const parts = String(fullName || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (parts.length === 2) {
+    return {
+      firstName: parts[0],
+      lastName: parts[1],
+    };
+  }
+
+  if (parts.length > 2) {
+    const localPart = String(email || "")
+      .trim()
+      .toLowerCase()
+      .split("@")[0];
+    const emailSegments = localPart
+      .split(".")
+      .map((segment) => segment.trim())
+      .filter(Boolean);
+
+    if (emailSegments.length >= 2) {
+      const normalizedParts = parts.map((part) => part.toLowerCase().replace(/[^\p{L}\p{N}]/gu, ""));
+      const emailPrefix = emailSegments.slice(0, -1).join("").replace(/[^\p{L}\p{N}]/gu, "");
+      const emailSuffix = emailSegments[emailSegments.length - 1].replace(/[^\p{L}\p{N}]/gu, "");
+
+      for (let index = 1; index < parts.length; index += 1) {
+        const rightSide = normalizedParts.slice(index).join("");
+        if (rightSide === emailSuffix) {
+          return {
+            firstName: parts.slice(0, index).join(" "),
+            lastName: parts.slice(index).join(" "),
+          };
+        }
+      }
+
+      for (let index = 1; index < parts.length; index += 1) {
+        const leftSide = normalizedParts.slice(0, index).join("");
+        if (leftSide === emailPrefix) {
+          return {
+            firstName: parts.slice(0, index).join(" "),
+            lastName: parts.slice(index).join(" "),
+          };
+        }
+      }
+    }
+  }
+
+  return {
+    firstName: parts.join(" ") || "SSO",
+    lastName: "",
   };
 }
 
@@ -574,6 +629,7 @@ async function getAppSettings(client = pool) {
     `
       SELECT
         allow_registration,
+        allow_user_profile_edit,
         allow_project_delete,
         allow_language_delete,
         sso_enabled,
@@ -600,6 +656,7 @@ async function getAppSettings(client = pool) {
 
   return {
     allowRegistration: Boolean(row?.allow_registration),
+    allowUserProfileEdit: Boolean(row?.allow_user_profile_edit ?? true),
     allowProjectDelete: Boolean(row?.allow_project_delete),
     allowLanguageDelete: Boolean(row?.allow_language_delete),
     sso: {
@@ -1750,6 +1807,11 @@ app.get("/api/auth/me", requireAuth, (req, res) => {
 
 app.patch("/api/auth/profile", requireAuth, async (req, res, next) => {
   try {
+    const settings = await getAppSettings();
+    if (req.currentUser.role !== "admin" && !settings.allowUserProfileEdit) {
+      return res.status(403).json({ message: "Profile editing is currently disabled for non-admin users." });
+    }
+
     const firstName = String(req.body.firstName || "").trim();
     const lastName = String(req.body.lastName || "").trim();
     const email = String(req.body.email || "").trim().toLowerCase();
@@ -2034,6 +2096,7 @@ app.get("/api/settings/app", requireRole("admin"), async (_req, res, next) => {
     const settings = await getAppSettings();
     res.json({
       allowRegistration: settings.allowRegistration,
+      allowUserProfileEdit: settings.allowUserProfileEdit,
       allowProjectDelete: settings.allowProjectDelete,
       allowLanguageDelete: settings.allowLanguageDelete,
       updatedAt: settings.updatedAt,
@@ -2050,13 +2113,15 @@ app.patch("/api/settings/app", requireRole("admin"), async (req, res, next) => {
         UPDATE app_settings
         SET
           allow_registration = $1,
-          allow_project_delete = $2,
-          allow_language_delete = $3,
+          allow_user_profile_edit = $2,
+          allow_project_delete = $3,
+          allow_language_delete = $4,
           updated_at = NOW()
         WHERE id = TRUE
       `,
       [
         Boolean(req.body.allowRegistration),
+        Boolean(req.body.allowUserProfileEdit),
         Boolean(req.body.allowProjectDelete),
         Boolean(req.body.allowLanguageDelete),
       ],
@@ -2809,7 +2874,14 @@ async function start() {
   });
 }
 
-start().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+if (require.main === module) {
+  start().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  getUserNamesFromClaims,
+  getUserNamesFromFullName,
+};

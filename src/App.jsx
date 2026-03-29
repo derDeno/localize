@@ -2078,7 +2078,7 @@ function SettingsPage() {
 }
 
 function ProfileTab() {
-  const { user, setBootstrap } = useApp();
+  const { user, settings, setBootstrap } = useApp();
   const { showToast } = useOutletContext();
   const [profileForm, setProfileForm] = useState({
     firstName: user?.firstName || "",
@@ -2099,6 +2099,7 @@ function ProfileTab() {
   const [passwordError, setPasswordError] = useState("");
   const [profileSubmitting, setProfileSubmitting] = useState(false);
   const [passwordSubmitting, setPasswordSubmitting] = useState(false);
+  const canEditProfile = roleAllows(user, "admin") || settings?.allowUserProfileEdit !== false;
 
   useEffect(() => {
     setProfileForm({
@@ -2195,6 +2196,7 @@ function ProfileTab() {
             <span>First name</span>
             <input
               value={profileForm.firstName}
+              disabled={!canEditProfile}
               onChange={(event) => setProfileForm((current) => ({ ...current, firstName: event.target.value }))}
             />
           </label>
@@ -2202,6 +2204,7 @@ function ProfileTab() {
             <span>Last name</span>
             <input
               value={profileForm.lastName}
+              disabled={!canEditProfile}
               onChange={(event) => setProfileForm((current) => ({ ...current, lastName: event.target.value }))}
             />
           </label>
@@ -2210,6 +2213,7 @@ function ProfileTab() {
             <input
               type="email"
               value={profileForm.email}
+              disabled={!canEditProfile}
               onChange={(event) => setProfileForm((current) => ({ ...current, email: event.target.value }))}
             />
           </label>
@@ -2220,9 +2224,12 @@ function ProfileTab() {
         </div>
 
         <div>
+          {!canEditProfile ? (
+            <p className="helper-text">Only administrators can edit profile details right now. You can still change your password below.</p>
+          ) : null}
           {profileError ? <p className="error-text">{profileError}</p> : null}
 
-          <button className="primary-button" type="submit" disabled={profileSubmitting}>
+          <button className="primary-button" type="submit" disabled={profileSubmitting || !canEditProfile}>
             {profileSubmitting ? "Saving..." : "Save profile"}
           </button>
         </div>
@@ -2851,6 +2858,7 @@ function AppSettingsTab() {
   const { showToast } = useOutletContext();
   const [form, setForm] = useState({
     allowRegistration: true,
+    allowUserProfileEdit: true,
     allowProjectDelete: true,
     allowLanguageDelete: true,
   });
@@ -2860,6 +2868,7 @@ function AppSettingsTab() {
     apiFetch("/api/settings/app").then((payload) => {
       setForm({
         allowRegistration: payload.allowRegistration,
+        allowUserProfileEdit: payload.allowUserProfileEdit !== false,
         allowProjectDelete: payload.allowProjectDelete,
         allowLanguageDelete: payload.allowLanguageDelete,
       });
@@ -2898,6 +2907,15 @@ function AppSettingsTab() {
           onChange={(event) => setForm((current) => ({ ...current, allowRegistration: event.target.checked }))}
         />
         <span>Allow new user registration</span>
+      </label>
+
+      <label className="toggle-row">
+        <input
+          type="checkbox"
+          checked={form.allowUserProfileEdit}
+          onChange={(event) => setForm((current) => ({ ...current, allowUserProfileEdit: event.target.checked }))}
+        />
+        <span>Allow non-admin users to edit their profile</span>
       </label>
 
       <label className="toggle-row">
