@@ -16,6 +16,7 @@
   --toast-error-bg: rgba(87, 30, 24, 0.94);
   --toast-error-text: #ffd9d5;
   --shadow: 0 30px 80px rgba(0, 0, 0, 0.25);
+  --progress-track: rgba(146, 168, 200, 0.28);
   --gradient:
     radial-gradient(circle at top left, rgba(240, 138, 36, 0.26), transparent 30%),
     radial-gradient(circle at top right, rgba(255, 190, 92, 0.16), transparent 24%),
@@ -41,6 +42,7 @@
   --toast-error-bg: rgba(253, 235, 233, 0.98);
   --toast-error-text: #a3342e;
   --shadow: 0 30px 80px rgba(18, 39, 68, 0.12);
+  --progress-track: rgba(93, 114, 140, 0.2);
   --gradient:
     radial-gradient(circle at top left, rgba(217, 106, 0, 0.16), transparent 28%),
     radial-gradient(circle at top right, rgba(255, 184, 77, 0.18), transparent 24%),
@@ -160,6 +162,8 @@ input[type="checkbox"]:hover {
   padding: 24px;
   width: min(1280px, 100%);
   margin: 0 auto;
+  display: flex;
+  flex-direction: column;
 }
 
 .github-footer {
@@ -202,6 +206,11 @@ input[type="checkbox"]:hover {
 .profile-summary-grid {
   display: grid;
   gap: 20px;
+}
+
+.page-shell {
+  flex: 1;
+  align-content: start;
 }
 
 .dashboard-grid,
@@ -1085,12 +1094,13 @@ input[type="checkbox"]:hover {
   position: relative;
   width: 100%;
   height: 26px;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--progress-track);
   border-radius: 999px;
   overflow: hidden;
 }
 
 .progress-bar {
+  position: relative;
   height: 100%;
   border-radius: inherit;
   background: linear-gradient(135deg, var(--accent) 0%, #ffb44d 100%);
@@ -1102,10 +1112,14 @@ input[type="checkbox"]:hover {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--accent-contrast);
+  color: #111111;
   font-size: 0.82rem;
   font-weight: 700;
   white-space: nowrap;
+}
+
+.progress-value-filled {
+  color: var(--accent-contrast);
 }
 
 .action-menu-button {
@@ -1149,6 +1163,18 @@ input[type="checkbox"]:hover {
   gap: 8px;
 }
 
+.editor-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 240px;
+  gap: 14px;
+  align-items: end;
+}
+
+.editor-filter {
+  display: grid;
+  gap: 8px;
+}
+
 .editor-empty-state {
   border: 1px dashed var(--line);
   border-radius: 18px;
@@ -1179,6 +1205,42 @@ input[type="checkbox"]:hover {
 
 .field-key-placeholder {
   visibility: hidden;
+}
+
+.editor-field-meta {
+  display: grid;
+  gap: 12px;
+}
+
+.translation-memory-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.translation-memory-button {
+  min-height: auto;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px dotted var(--accent);
+  background: transparent;
+  color: var(--text);
+}
+
+.translation-memory-button:hover,
+.translation-memory-button:focus-visible {
+  background: rgba(240, 138, 36, 0.1);
+}
+
+.editor-approval-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  width: fit-content;
+}
+
+.editor-approval-toggle span {
+  color: var(--muted);
 }
 
 .version-row,
@@ -1260,6 +1322,13 @@ input[type="checkbox"]:hover {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 18px;
   border-radius: 18px;
+}
+
+@media (max-width: 900px) {
+  .editor-toolbar,
+  .editor-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 .error-text {

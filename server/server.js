@@ -1186,6 +1186,75 @@ async function getTranslationEntries(projectId, languageId, client = pool) {
   return Object.fromEntries(result.rows.map((row) => [row.translation_key, row.value_text ?? ""]));
 }
 
+async function getTranslationRecords(projectId, languageId, client = pool) {
+  const result = await client.query(
+    `
+      SELECT
+        id,
+        translation_key,
+        value_text,
+        approved,
+        approved_at,
+        approved_by,
+        value_updated_at,
+        updated_at
+      FROM translations
+      WHERE project_id = $1
+        AND language_id = $2
+        AND deleted_at IS NULL
+      ORDER BY translation_key ASC
+    `,
+    [projectId, languageId],
+  );
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    key: row.translation_key,
+    value: row.value_text ?? "",
+    approved: Boolean(row.approved),
+    approvedAt: row.approved_at,
+    approvedBy: row.approved_by,
+    valueUpdatedAt: row.value_updated_at,
+    updatedAt: row.updated_at,
+  }));
+}
+
+async function getTranslationMemoryMap(sourceLanguageCode, targetLanguageCode, sourceTexts, client = pool) {
+  if (
+    !sourceTexts.length ||
+    !sourceLanguageCode ||
+    !targetLanguageCode ||
+    sourceLanguageCode === targetLanguageCode
+  ) {
+    return {};
+  }
+
+  const result = await client.query(
+    `
+      SELECT source_text, translated_text
+      FROM translation_memories
+      WHERE source_language_code = $1
+        AND target_language_code = $2
+        AND source_text = ANY($3::text[])
+      ORDER BY updated_at DESC, translated_text ASC
+    `,
+    [sourceLanguageCode, targetLanguageCode, sourceTexts],
+  );
+
+  const memoryMap = {};
+  for (const row of result.rows) {
+    if (!memoryMap[row.source_text]) {
+      memoryMap[row.source_text] = [];
+    }
+
+    if (!memoryMap[row.source_text].includes(row.translated_text)) {
+      memoryMap[row.source_text].push(row.translated_text);
+    }
+  }
+
+  return memoryMap;
+}
+
 async function getProjectData(projectId, client = pool) {
   const project = await getProjectRow(projectId, client);
   const languages = await getProjectLanguages(projectId, client);
@@ -1344,45 +1413,169 @@ async function listProjects() {
 }
 
 async function upsertTranslations(projectId, language, entries, userId, client) {
-  await client.query(
-    `
-      DELETE FROM translations
-      WHERE project_id = $1
-        AND language_id = $2
-    `,
-    [projectId, language.id],
-  );
+  const existingRows = await getTranslationRecords(projectId, language.id, client);
+  const existingByKey = new Map(existingRows.map((row) => [row.key, row]));
+  const nextKeys = new Set(Object.keys(entries));
+  let changed = false;
 
-  const keys = Object.keys(entries);
-  for (const key of keys) {
+  if (existingRows.length) {
+    const removedIds = existingRows.filter((row) => !nextKeys.has(row.key)).map((row) => row.id);
+    if (removedIds.length) {
+      changed = true;
+      await client.query("DELETE FROM translations WHERE id = ANY($1::uuid[])", [removedIds]);
+    }
+  }
+
+  for (const key of Object.keys(entries)) {
+    const value = stringifyValue(entries[key]);
+    const existing = existingByKey.get(key);
+
+    if (!existing) {
+      changed = true;
+      await client.query(
+        `
+          INSERT INTO translations (
+            id,
+            project_id,
+            language_id,
+            translation_key,
+            value_text,
+            value_type,
+            approved,
+            approved_at,
+            approved_by,
+            value_updated_at,
+            created_by,
+            updated_by
+          )
+          VALUES ($1, $2, $3, $4, $5, 'string', FALSE, NULL, NULL, NOW(), $6, $6)
+        `,
+        [crypto.randomUUID(), projectId, language.id, key, value, userId || null],
+      );
+      continue;
+    }
+
+    if (existing.value === value) {
+      continue;
+    }
+
+    changed = true;
     await client.query(
       `
-        INSERT INTO translations (
-          id,
-          project_id,
-          language_id,
-          translation_key,
-          value_text,
-          value_type,
-          created_by,
-          updated_by
-        )
-        VALUES ($1, $2, $3, $4, $5, 'string', $6, $6)
+        UPDATE translations
+        SET
+          value_text = $2,
+          approved = CASE WHEN $4 THEN approved ELSE FALSE END,
+          approved_at = CASE WHEN $4 THEN approved_at ELSE NULL END,
+          approved_by = CASE WHEN $4 THEN approved_by ELSE NULL END,
+          value_updated_at = NOW(),
+          updated_at = NOW(),
+          updated_by = $3
+        WHERE id = $1
       `,
-      [crypto.randomUUID(), projectId, language.id, key, stringifyValue(entries[key]), userId || null],
+      [existing.id, value, userId || null, Boolean(language.is_source)],
+    );
+  }
+
+  if (changed) {
+    await client.query(
+      `
+        UPDATE languages
+        SET
+          updated_at = NOW(),
+          updated_by = $3
+        WHERE id = $1
+          AND project_id = $2
+      `,
+      [language.id, projectId, userId || null],
+    );
+  }
+}
+
+async function updateTranslationApprovals(projectId, language, approvals, userId, client) {
+  if (language.is_source) {
+    return false;
+  }
+
+  const approvalMap = isPlainObject(approvals) ? approvals : {};
+  const rows = await getTranslationRecords(projectId, language.id, client);
+  let changed = false;
+
+  for (const row of rows) {
+    const hasTranslation = String(row.value ?? "").trim() !== "";
+    const nextApproved = hasTranslation && Boolean(approvalMap[row.key]);
+    if (nextApproved === row.approved) {
+      continue;
+    }
+
+    changed = true;
+    await client.query(
+      `
+        UPDATE translations
+        SET
+          approved = $2,
+          approved_at = CASE WHEN $2 THEN NOW() ELSE NULL END,
+          approved_by = CASE WHEN $2 THEN $3 ELSE NULL END,
+          updated_at = NOW(),
+          updated_by = $3
+        WHERE id = $1
+      `,
+      [row.id, nextApproved, userId || null],
+    );
+  }
+
+  return changed;
+}
+
+async function syncTranslationMemory(sourceLanguageCode, targetLanguageCode, sourceEntries, translatedEntries, userId, client) {
+  if (!sourceLanguageCode || !targetLanguageCode || sourceLanguageCode === targetLanguageCode) {
+    return;
+  }
+
+  for (const [key, translatedValue] of Object.entries(translatedEntries)) {
+    const sourceText = String(sourceEntries[key] ?? "").trim();
+    const targetText = String(translatedValue ?? "").trim();
+
+    if (!sourceText || !targetText) {
+      continue;
+    }
+
+    await client.query(
+      `
+        INSERT INTO translation_memories (
+          id,
+          source_language_code,
+          target_language_code,
+          source_text,
+          translated_text,
+          created_by,
+          updated_by,
+          updated_at,
+          last_used_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $6, NOW(), NOW())
+        ON CONFLICT (source_language_code, target_language_code, source_text, translated_text)
+        DO UPDATE SET
+          updated_by = EXCLUDED.updated_by,
+          updated_at = NOW(),
+          last_used_at = NOW()
+      `,
+      [
+        crypto.randomUUID(),
+        sourceLanguageCode,
+        targetLanguageCode,
+        sourceText,
+        targetText,
+        userId || null,
+      ],
     );
   }
 
   await client.query(
     `
-      UPDATE languages
-      SET
-        updated_at = NOW(),
-        updated_by = $3
-      WHERE id = $1
-        AND project_id = $2
+      DELETE FROM translation_memories
+      WHERE translated_text = ''
     `,
-    [language.id, projectId, userId || null],
   );
 }
 
@@ -1529,6 +1722,7 @@ async function updateProjectLanguageEntries(projectId, languageCode, entries, ac
         Object.keys(submittedEntries).map((key) => [key, String(existingEntries[key] ?? "")]),
       );
       await upsertTranslations(projectId, language, syncedEntries, actorId, client);
+      await syncTranslationMemory(project.source_language, language.code, submittedEntries, syncedEntries, actorId, client);
     }
   } else {
     const sourceEntries = await getTranslationEntries(projectId, sourceLanguage.id, client);
@@ -1536,8 +1730,40 @@ async function updateProjectLanguageEntries(projectId, languageCode, entries, ac
       Object.keys(sourceEntries).map((key) => [key, String(submittedEntries[key] ?? "")]),
     );
     await upsertTranslations(projectId, targetLanguage, safeEntries, actorId, client);
+    await syncTranslationMemory(project.source_language, targetLanguage.code, sourceEntries, safeEntries, actorId, client);
   }
 
+  await persistProjectConfig(projectId, actorId, client);
+  await createProjectVersion(projectId, actorId, client);
+}
+
+async function saveProjectLanguageEditorState(projectId, languageCode, entries, approvals, actorId, client) {
+  const normalizedLanguageCode = String(languageCode || "").trim().toLowerCase();
+  const project = await getProjectRow(projectId, client);
+  const sourceLanguage = await getLanguageRow(projectId, project.source_language, client);
+  const targetLanguage = await getLanguageRow(projectId, normalizedLanguageCode, client);
+  const sourceEntries = await getTranslationEntries(projectId, sourceLanguage.id, client);
+  const submittedEntries = normalizeEntryPayload(entries);
+  const safeEntries = Object.fromEntries(
+    Object.keys(sourceEntries).map((key) => [key, String(submittedEntries[key] ?? "")]),
+  );
+
+  await upsertTranslations(projectId, targetLanguage, safeEntries, actorId, client);
+  const approvalsChanged = await updateTranslationApprovals(projectId, targetLanguage, approvals, actorId, client);
+  if (approvalsChanged) {
+    await client.query(
+      `
+        UPDATE languages
+        SET
+          updated_at = NOW(),
+          updated_by = $3
+        WHERE id = $1
+          AND project_id = $2
+      `,
+      [targetLanguage.id, projectId, actorId || null],
+    );
+  }
+  await syncTranslationMemory(project.source_language, targetLanguage.code, sourceEntries, safeEntries, actorId, client);
   await persistProjectConfig(projectId, actorId, client);
   await createProjectVersion(projectId, actorId, client);
 }
@@ -2596,6 +2822,8 @@ app.post("/api/projects/:projectId/languages", requireRole("editor"), upload.sin
 
       const language = {
         id: crypto.randomUUID(),
+        code,
+        is_source: false,
       };
 
       await client.query(
@@ -2618,6 +2846,7 @@ app.post("/api/projects/:projectId/languages", requireRole("editor"), upload.sin
       );
 
       await upsertTranslations(req.params.projectId, language, entries, req.currentUser.id, client);
+      await syncTranslationMemory(project.source_language, code, sourceEntries, entries, req.currentUser.id, client);
       await persistProjectConfig(req.params.projectId, req.currentUser.id, client);
       await createProjectVersion(req.params.projectId, req.currentUser.id, client);
     });
@@ -2706,21 +2935,41 @@ app.get("/api/projects/:projectId/languages/:languageCode", requireAuth, async (
     const project = await getProjectRow(req.params.projectId);
     const sourceLanguage = await getLanguageRow(req.params.projectId, project.source_language);
     const targetLanguage = await getLanguageRow(req.params.projectId, req.params.languageCode);
-    const sourceEntries = await getTranslationEntries(req.params.projectId, sourceLanguage.id);
-    const translationEntries = await getTranslationEntries(req.params.projectId, targetLanguage.id);
+    const sourceRecords = await getTranslationRecords(req.params.projectId, sourceLanguage.id);
+    const targetRecords = await getTranslationRecords(req.params.projectId, targetLanguage.id);
+    const sourceEntries = Object.fromEntries(sourceRecords.map((row) => [row.key, row.value]));
+    const translationEntries = Object.fromEntries(targetRecords.map((row) => [row.key, row.value]));
+    const sourceRecordMap = new Map(sourceRecords.map((row) => [row.key, row]));
+    const targetRecordMap = new Map(targetRecords.map((row) => [row.key, row]));
+    const memoryMap = await getTranslationMemoryMap(
+      project.source_language,
+      targetLanguage.code,
+      [...new Set(sourceRecords.map((row) => row.value).filter(Boolean))],
+    );
 
     const rows = Object.keys(sourceEntries)
       .sort((a, b) => a.localeCompare(b))
-      .map((key) => ({
-        key,
-        source: sourceEntries[key] ?? "",
-        translation: translationEntries[key] ?? "",
-      }));
+      .map((key) => {
+        const sourceRecord = sourceRecordMap.get(key);
+        const targetRecord = targetRecordMap.get(key);
+        const sourceValue = sourceEntries[key] ?? "";
+
+        return {
+          key,
+          source: sourceValue,
+          translation: translationEntries[key] ?? "",
+          approved: Boolean(targetRecord?.approved),
+          sourceUpdatedAt: sourceRecord?.valueUpdatedAt || sourceRecord?.updatedAt || null,
+          translationUpdatedAt: targetRecord?.valueUpdatedAt || null,
+          memories: (memoryMap[sourceValue] || []).filter(Boolean),
+        };
+      });
 
     res.json({
       projectId: req.params.projectId,
       sourceLanguage: project.source_language,
       languageCode: targetLanguage.code,
+      isSourceLanguage: targetLanguage.code === project.source_language,
       rows,
       progress: countProgress(sourceEntries, translationEntries),
     });
@@ -2732,13 +2981,27 @@ app.get("/api/projects/:projectId/languages/:languageCode", requireAuth, async (
 app.put("/api/projects/:projectId/languages/:languageCode", requireRole("editor"), async (req, res, next) => {
   try {
     await withTransaction(async (client) => {
-      await updateProjectLanguageEntries(
-        req.params.projectId,
-        req.params.languageCode,
-        req.body.entries,
-        req.currentUser.id,
-        client,
-      );
+      const project = await getProjectRow(req.params.projectId, client);
+      const targetLanguage = await getLanguageRow(req.params.projectId, req.params.languageCode, client);
+
+      if (targetLanguage.code === project.source_language) {
+        await updateProjectLanguageEntries(
+          req.params.projectId,
+          req.params.languageCode,
+          req.body.entries,
+          req.currentUser.id,
+          client,
+        );
+      } else {
+        await saveProjectLanguageEditorState(
+          req.params.projectId,
+          req.params.languageCode,
+          req.body.entries,
+          req.body.approvals,
+          req.currentUser.id,
+          client,
+        );
+      }
     });
 
     await syncProjectFiles(req.params.projectId);
@@ -2780,6 +3043,14 @@ app.post(
         );
 
         await upsertTranslations(req.params.projectId, targetLanguage, safeEntries, req.currentUser.id, client);
+        await syncTranslationMemory(
+          project.source_language,
+          targetLanguage.code,
+          sourceEntries,
+          safeEntries,
+          req.currentUser.id,
+          client,
+        );
         await client.query(
           `
             UPDATE languages
