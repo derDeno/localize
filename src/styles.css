@@ -160,7 +160,7 @@ input[type="checkbox"]:hover {
 .app-shell {
   min-height: 100vh;
   padding: 24px;
-  width: min(1280px, 100%);
+  width: min(1440px, 100%);
   margin: 0 auto;
   display: flex;
   flex-direction: column;
@@ -1143,6 +1143,13 @@ input[type="checkbox"]:hover {
   margin-bottom: 22px;
 }
 
+.editor-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
 .editor-title {
   display: flex;
   align-items: center;
@@ -1176,6 +1183,36 @@ input[type="checkbox"]:hover {
   align-items: end;
 }
 
+.editor-bulk-toolbar {
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--bg-soft);
+}
+
+.editor-bulk-summary {
+  color: var(--muted);
+}
+
+.editor-bulk-summary strong {
+  color: var(--text);
+}
+
+.editor-bulk-actions,
+.editor-bulk-replace {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.editor-bulk-replace input {
+  flex: 1 1 220px;
+}
+
 .editor-filter {
   display: grid;
   gap: 8px;
@@ -1188,6 +1225,8 @@ input[type="checkbox"]:hover {
 }
 
 .editor-results {
+  display: grid;
+  gap: 18px;
   max-height: calc(100vh - 320px);
   overflow: auto;
   padding-right: 6px;
@@ -1198,6 +1237,10 @@ input[type="checkbox"]:hover {
   border: 1px solid var(--line);
   border-radius: 18px;
   background: var(--bg-soft);
+}
+
+.editor-field-source {
+  align-self: start;
 }
 
 .editor-field-editable input {
@@ -1338,10 +1381,40 @@ input[type="checkbox"]:hover {
   contain-intrinsic-size: 220px;
 }
 
+.editor-row-with-selection {
+  grid-template-columns: auto repeat(2, minmax(0, 1fr));
+}
+
+.editor-row-selection {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 14px;
+}
+
+.editor-row-selection input {
+  width: 1.05rem;
+}
+
 @media (max-width: 900px) {
   .editor-toolbar,
   .editor-row {
     grid-template-columns: 1fr;
+  }
+
+  .editor-header-actions {
+    width: 100%;
+  }
+
+  .editor-bulk-actions,
+  .editor-bulk-replace {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .editor-row-selection {
+    padding-top: 0;
+    justify-content: flex-start;
   }
 }
 

@@ -12,18 +12,27 @@ const VIRTUAL_OVERSCAN = 6;
 const EditorRow = memo(function EditorRow({
   row,
   canEdit,
+  showSelection,
+  selected,
   isSourceLanguage,
   translationApprovalEnabled,
   translationMemoryEnabled,
   value,
   approved,
+  onSelectionChange,
   onTranslationChange,
   onApprovalChange,
   onMemoryApply,
 }) {
   return (
-    <div className="editor-row">
-      <label className="editor-field">
+    <div className={showSelection ? "editor-row editor-row-with-selection" : "editor-row"}>
+      {showSelection ? (
+        <label className="editor-row-selection" aria-label={`Select ${row.key}`}>
+          <input type="checkbox" checked={selected} onChange={(event) => onSelectionChange(row.key, event.target.checked)} />
+        </label>
+      ) : null}
+
+      <label className="editor-field editor-field-source">
         <span className="field-key">{row.key}</span>
         <input readOnly value={String(row.source ?? "")} />
       </label>
@@ -80,6 +89,10 @@ function EditorPage() {
   const [editorApprovalDraft, setEditorApprovalDraft] = useState({});
   const [searchQuery, setSearchQuery] = useState("");
   const [filterMode, setFilterMode] = useState("all");
+  const [showBulkActions, setShowBulkActions] = useState(false);
+  const [selectedKeys, setSelectedKeys] = useState(() => new Set());
+  const [bulkFindValue, setBulkFindValue] = useState("");
+  const [bulkReplaceValue, setBulkReplaceValue] = useState("");
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -122,6 +135,7 @@ function EditorPage() {
             Object.fromEntries(editorDetails.rows.map((row) => [row.key, Boolean(row.approved)])),
           );
           setDirtyKeys(new Set());
+          setSelectedKeys(new Set());
         }
       } catch (requestError) {
         if (active) {
@@ -183,6 +197,7 @@ function EditorPage() {
 
   const canEdit = roleAllows(user, "editor");
   const hasUnsavedChanges = canEdit && dirtyKeys.size > 0;
+  const selectedCount = selectedKeys.size;
 
   const syncDirtyStateForRow = useCallback(
     (key, nextTranslation, nextApproved) => {
@@ -287,6 +302,28 @@ function EditorPage() {
     [syncDirtyStateForRow],
   );
 
+  const handleSelectionChange = useCallback((key, shouldSelect) => {
+    setSelectedKeys((current) => {
+      const next = new Set(current);
+      if (shouldSelect) {
+        next.add(key);
+      } else {
+        next.delete(key);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleToggleBulkActions = useCallback(() => {
+    setShowBulkActions((current) => {
+      if (current) {
+        setSelectedKeys(new Set());
+      }
+
+      return !current;
+    });
+  }, []);
+
   const blocker = useBlocker(hasUnsavedChanges);
 
   useEffect(() => {
@@ -373,6 +410,159 @@ function EditorPage() {
     });
   }, [deferredSearchQuery, editorApprovalDraft, editorData, editorDraft, filterMode]);
 
+  const filteredSelectedCount = useMemo(
+    () => filteredRows.reduce((count, row) => count + (selectedKeys.has(row.key) ? 1 : 0), 0),
+    [filteredRows, selectedKeys],
+  );
+
+  const allFilteredSelected =
+    canEdit && filteredRows.length > 0 && filteredRows.every((row) => selectedKeys.has(row.key));
+
+  const applyBulkRowChanges = useCallback(
+    (keys, buildNextState) => {
+      if (!keys.length) {
+        return 0;
+      }
+
+      const nextDraft = { ...editorDraft };
+      const nextApprovalDraft = { ...editorApprovalDraft };
+      const nextDirtyKeys = new Set(dirtyKeys);
+      let changedCount = 0;
+
+      for (const key of keys) {
+        const savedRow = savedRowMap.get(key);
+        if (!savedRow) {
+          continue;
+        }
+
+        const currentTranslation = String(nextDraft[key] ?? savedRow.translation ?? "");
+        const currentApproved = Boolean(nextApprovalDraft[key] ?? savedRow.approved);
+        const nextState = buildNextState({
+          key,
+          row: savedRow,
+          currentTranslation,
+          currentApproved,
+        });
+
+        if (!nextState) {
+          continue;
+        }
+
+        const nextTranslation = Object.prototype.hasOwnProperty.call(nextState, "translation")
+          ? nextState.translation
+          : currentTranslation;
+        const nextApproved = Object.prototype.hasOwnProperty.call(nextState, "approved")
+          ? nextState.approved
+          : currentApproved;
+
+        if (nextTranslation === currentTranslation && nextApproved === currentApproved) {
+          continue;
+        }
+
+        nextDraft[key] = nextTranslation;
+        nextApprovalDraft[key] = nextApproved;
+
+        const savedTranslation = String(savedRow.translation ?? "");
+        const translationsChanged = nextTranslation !== savedTranslation;
+        const approvalsChanged =
+          translationApprovalEnabled && !editorData?.isSourceLanguage
+            ? Boolean(nextApproved) !== Boolean(savedRow.approved)
+            : false;
+
+        if (translationsChanged || approvalsChanged) {
+          nextDirtyKeys.add(key);
+        } else {
+          nextDirtyKeys.delete(key);
+        }
+
+        changedCount += 1;
+      }
+
+      if (changedCount > 0) {
+        setEditorDraft(nextDraft);
+        setEditorApprovalDraft(nextApprovalDraft);
+        setDirtyKeys(nextDirtyKeys);
+      }
+
+      return changedCount;
+    },
+    [dirtyKeys, editorApprovalDraft, editorData?.isSourceLanguage, editorDraft, savedRowMap, translationApprovalEnabled],
+  );
+
+  const handleSelectFilteredRows = useCallback(() => {
+    setSelectedKeys((current) => {
+      const next = new Set(current);
+      for (const row of filteredRows) {
+        next.add(row.key);
+      }
+      return next;
+    });
+  }, [filteredRows]);
+
+  const handleClearSelection = useCallback(() => {
+    setSelectedKeys(new Set());
+  }, []);
+
+  const handleCopySourceToTarget = useCallback(() => {
+    const changedCount = applyBulkRowChanges(Array.from(selectedKeys), ({ row }) => {
+      const nextTranslation = String(row.source ?? "");
+      return {
+        translation: nextTranslation,
+        approved: nextTranslation === String(row.translation ?? "") ? Boolean(row.approved) : false,
+      };
+    });
+
+    if (changedCount > 0) {
+      showToast("success", `Copied source text into ${changedCount} row${changedCount === 1 ? "" : "s"}.`);
+      return;
+    }
+
+    showToast("error", "No selected rows needed changes.");
+  }, [applyBulkRowChanges, selectedKeys, showToast]);
+
+  const handleMarkSelectedReviewed = useCallback(() => {
+    const changedCount = applyBulkRowChanges(Array.from(selectedKeys), ({ currentTranslation }) => {
+      if (currentTranslation.trim() === "") {
+        return null;
+      }
+
+      return { approved: true };
+    });
+
+    if (changedCount > 0) {
+      showToast("success", `Marked ${changedCount} row${changedCount === 1 ? "" : "s"} as reviewed.`);
+      return;
+    }
+
+    showToast("error", "No selected translated rows needed approval changes.");
+  }, [applyBulkRowChanges, selectedKeys, showToast]);
+
+  const handleBulkReplace = useCallback(() => {
+    if (!bulkFindValue) {
+      showToast("error", "Enter text to find before running bulk replace.");
+      return;
+    }
+
+    const changedCount = applyBulkRowChanges(Array.from(selectedKeys), ({ row, currentTranslation }) => {
+      if (!currentTranslation.includes(bulkFindValue)) {
+        return null;
+      }
+
+      const nextTranslation = currentTranslation.split(bulkFindValue).join(bulkReplaceValue);
+      return {
+        translation: nextTranslation,
+        approved: nextTranslation === String(row.translation ?? "") ? Boolean(row.approved) : false,
+      };
+    });
+
+    if (changedCount > 0) {
+      showToast("success", `Replaced text in ${changedCount} row${changedCount === 1 ? "" : "s"}.`);
+      return;
+    }
+
+    showToast("error", "No selected rows contained that text.");
+  }, [applyBulkRowChanges, bulkFindValue, bulkReplaceValue, selectedKeys, showToast]);
+
   const visibleRange = useMemo(() => {
     const startIndex = Math.max(0, Math.floor(scrollTop / VIRTUAL_ROW_HEIGHT) - VIRTUAL_OVERSCAN);
     const visibleCount = Math.ceil(viewportHeight / VIRTUAL_ROW_HEIGHT) + VIRTUAL_OVERSCAN * 2;
@@ -413,6 +603,7 @@ function EditorPage() {
       setEditorDraft(Object.fromEntries(editorDetails.rows.map((row) => [row.key, row.translation ?? ""])));
       setEditorApprovalDraft(Object.fromEntries(editorDetails.rows.map((row) => [row.key, Boolean(row.approved)])));
       setDirtyKeys(new Set());
+      setSelectedKeys(new Set());
       showToast("success", `Saved. ${progressLabel(result.progress)}`);
     } catch (requestError) {
       showToast("error", requestError.message);
@@ -457,12 +648,17 @@ function EditorPage() {
         </div>
 
         {roleAllows(user, "editor") ? (
-          <button className="primary-button" disabled={busy} type="button" onClick={handleSaveTranslations}>
-            <span className="button-icon" aria-hidden="true">
-              <FiSave />
-            </span>
-            {busy ? "Saving..." : "Save progress"}
-          </button>
+          <div className="editor-header-actions">
+            <button className="secondary-button" type="button" onClick={handleToggleBulkActions}>
+              {showBulkActions ? "Hide actions" : "Show actions"}
+            </button>
+            <button className="primary-button" disabled={busy} type="button" onClick={handleSaveTranslations}>
+              <span className="button-icon" aria-hidden="true">
+                <FiSave />
+              </span>
+              {busy ? "Saving..." : "Save progress"}
+            </button>
+          </div>
         ) : null}
       </div>
 
@@ -488,6 +684,65 @@ function EditorPage() {
           </label>
         </div>
 
+        {canEdit && showBulkActions ? (
+          <div className="editor-bulk-toolbar">
+            <div className="editor-bulk-summary">
+              <strong>{selectedCount}</strong> selected
+              {filteredRows.length > 0 ? ` · ${filteredSelectedCount}/${filteredRows.length} in current view` : ""}
+            </div>
+
+            <div className="editor-bulk-actions">
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={filteredRows.length === 0 || allFilteredSelected}
+                onClick={handleSelectFilteredRows}
+              >
+                Select filtered
+              </button>
+              <button className="ghost-button" type="button" disabled={selectedCount === 0} onClick={handleClearSelection}>
+                Clear
+              </button>
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={selectedCount === 0 || editorData.isSourceLanguage}
+                onClick={handleCopySourceToTarget}
+              >
+                Copy source to target
+              </button>
+              {!editorData.isSourceLanguage && translationApprovalEnabled ? (
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={selectedCount === 0}
+                  onClick={handleMarkSelectedReviewed}
+                >
+                  Mark reviewed
+                </button>
+              ) : null}
+            </div>
+
+            <div className="editor-bulk-replace">
+              <input
+                type="text"
+                placeholder="Find text in selected rows"
+                value={bulkFindValue}
+                onChange={(event) => setBulkFindValue(event.target.value)}
+              />
+              <input
+                type="text"
+                placeholder="Replace with"
+                value={bulkReplaceValue}
+                onChange={(event) => setBulkReplaceValue(event.target.value)}
+              />
+              <button className="secondary-button" type="button" disabled={selectedCount === 0} onClick={handleBulkReplace}>
+                Replace selected
+              </button>
+            </div>
+          </div>
+        ) : null}
+
         {filteredRows.length === 0 ? (
           <div className="empty-state editor-empty-state">
             <h3>No matching translations</h3>
@@ -508,11 +763,14 @@ function EditorPage() {
                 key={row.key}
                 row={row}
                 canEdit={canEdit}
+                showSelection={canEdit && showBulkActions}
+                selected={selectedKeys.has(row.key)}
                 isSourceLanguage={editorData.isSourceLanguage}
                 translationApprovalEnabled={translationApprovalEnabled}
                 translationMemoryEnabled={translationMemoryEnabled}
                 value={String(editorDraft[row.key] ?? "")}
                 approved={Boolean(editorApprovalDraft[row.key] ?? row.approved)}
+                onSelectionChange={handleSelectionChange}
                 onTranslationChange={handleTranslationChange}
                 onApprovalChange={handleApprovalChange}
                 onMemoryApply={handleMemoryApply}
