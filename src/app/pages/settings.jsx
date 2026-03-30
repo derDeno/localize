@@ -880,6 +880,8 @@ function AppSettingsTab() {
     allowUserProfileEdit: true,
     allowProjectDelete: true,
     allowLanguageDelete: true,
+    translationApprovalEnabled: true,
+    translationMemoryEnabled: true,
   });
   const [submitting, setSubmitting] = useState(false);
 
@@ -890,6 +892,8 @@ function AppSettingsTab() {
         allowUserProfileEdit: payload.allowUserProfileEdit !== false,
         allowProjectDelete: payload.allowProjectDelete,
         allowLanguageDelete: payload.allowLanguageDelete,
+        translationApprovalEnabled: payload.translationApprovalEnabled !== false,
+        translationMemoryEnabled: payload.translationMemoryEnabled !== false,
       });
     });
   }, []);
@@ -953,6 +957,28 @@ function AppSettingsTab() {
           onChange={(event) => setForm((current) => ({ ...current, allowLanguageDelete: event.target.checked }))}
         />
         <span>Allow language deletion</span>
+      </label>
+
+      <label className="toggle-row">
+        <input
+          type="checkbox"
+          checked={form.translationApprovalEnabled}
+          onChange={(event) =>
+            setForm((current) => ({ ...current, translationApprovalEnabled: event.target.checked }))
+          }
+        />
+        <span>Enable translation approval</span>
+      </label>
+
+      <label className="toggle-row">
+        <input
+          type="checkbox"
+          checked={form.translationMemoryEnabled}
+          onChange={(event) =>
+            setForm((current) => ({ ...current, translationMemoryEnabled: event.target.checked }))
+          }
+        />
+        <span>Enable translation memory</span>
       </label>
       <button className="primary-button" type="submit" disabled={submitting}>
         {submitting ? "Saving..." : "Save app settings"}

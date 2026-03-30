@@ -778,6 +778,7 @@ input[type="checkbox"]:hover {
   border: 0;
   border-radius: 999px;
   background: color-mix(in srgb, var(--bg-soft) 72%, transparent);
+  cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: space-between;
@@ -1181,6 +1182,12 @@ input[type="checkbox"]:hover {
   background: var(--bg-soft);
 }
 
+.editor-results {
+  max-height: calc(100vh - 320px);
+  overflow: auto;
+  padding-right: 6px;
+}
+
 .editor-field {
   padding: 14px;
   border: 1px solid var(--line);
@@ -1322,6 +1329,8 @@ input[type="checkbox"]:hover {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 18px;
   border-radius: 18px;
+  content-visibility: auto;
+  contain-intrinsic-size: 220px;
 }
 
 @media (max-width: 900px) {

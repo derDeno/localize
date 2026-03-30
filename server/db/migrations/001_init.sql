@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS app_settings (
   allow_user_profile_edit BOOLEAN NOT NULL DEFAULT TRUE,
   allow_project_delete BOOLEAN NOT NULL DEFAULT TRUE,
   allow_language_delete BOOLEAN NOT NULL DEFAULT TRUE,
+  translation_approval_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  translation_memory_enabled BOOLEAN NOT NULL DEFAULT TRUE,
   sso_enabled BOOLEAN NOT NULL DEFAULT FALSE,
   sso_provider TEXT NOT NULL DEFAULT '',
   sso_issuer_url TEXT NOT NULL DEFAULT '',

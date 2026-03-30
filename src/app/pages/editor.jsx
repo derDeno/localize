@@ -1,15 +1,79 @@
-import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { FiChevronLeft, FiSave } from "react-icons/fi";
-import { Link, useOutletContext, useParams } from "react-router-dom";
+import { Link, useBeforeUnload, useBlocker, useOutletContext, useParams } from "react-router-dom";
 import { editorFilterOptions } from "../constants";
 import { Flag } from "../components/common";
 import { useApp } from "../context";
 import { apiFetch, progressLabel, roleAllows } from "../utils";
 
+const VIRTUAL_ROW_HEIGHT = 220;
+const VIRTUAL_OVERSCAN = 6;
+
+const EditorRow = memo(function EditorRow({
+  row,
+  canEdit,
+  isSourceLanguage,
+  translationApprovalEnabled,
+  translationMemoryEnabled,
+  value,
+  approved,
+  onTranslationChange,
+  onApprovalChange,
+  onMemoryApply,
+}) {
+  return (
+    <div className="editor-row">
+      <label className="editor-field">
+        <span className="field-key">{row.key}</span>
+        <input readOnly value={String(row.source ?? "")} />
+      </label>
+
+      <label className="editor-field editor-field-editable">
+        <span className="field-key field-key-placeholder">{row.key}</span>
+        <input
+          readOnly={!canEdit}
+          value={value}
+          onChange={(event) => onTranslationChange(row.key, event.target.value)}
+        />
+
+        <div className="editor-field-meta">
+          {translationMemoryEnabled && row.memories?.length ? (
+            <div className="translation-memory-list">
+              {row.memories.slice(0, 5).map((memory) => (
+                <button
+                  key={`${row.key}-${memory}`}
+                  className="translation-memory-button"
+                  type="button"
+                  disabled={!canEdit}
+                  onClick={() => onMemoryApply(row.key, memory)}
+                >
+                  {memory}
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          {!isSourceLanguage && translationApprovalEnabled ? (
+            <label className="editor-approval-toggle">
+              <input
+                type="checkbox"
+                checked={approved}
+                disabled={!canEdit || value.trim() === ""}
+                onChange={(event) => onApprovalChange(row.key, event.target.checked)}
+              />
+              <span>Approved</span>
+            </label>
+          ) : null}
+        </div>
+      </label>
+    </div>
+  );
+});
+
 function EditorPage() {
   const { showToast } = useOutletContext();
   const { projectId, languageCode } = useParams();
-  const { user } = useApp();
+  const { user, settings } = useApp();
   const [project, setProject] = useState(null);
   const [editorData, setEditorData] = useState(null);
   const [editorDraft, setEditorDraft] = useState({});
@@ -20,6 +84,20 @@ function EditorPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [dirtyKeys, setDirtyKeys] = useState(() => new Set());
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(720);
+  const resultsRef = useRef(null);
+  const translationApprovalEnabled = settings?.translationApprovalEnabled !== false;
+  const translationMemoryEnabled = settings?.translationMemoryEnabled !== false;
+
+  const availableFilterOptions = useMemo(
+    () =>
+      translationApprovalEnabled
+        ? editorFilterOptions
+        : editorFilterOptions.filter((option) => option.value !== "needs-approval" && option.value !== "approved"),
+    [translationApprovalEnabled],
+  );
 
   useEffect(() => {
     let active = true;
@@ -43,6 +121,7 @@ function EditorPage() {
           setEditorApprovalDraft(
             Object.fromEntries(editorDetails.rows.map((row) => [row.key, Boolean(row.approved)])),
           );
+          setDirtyKeys(new Set());
         }
       } catch (requestError) {
         if (active) {
@@ -62,9 +141,179 @@ function EditorPage() {
     };
   }, [projectId, languageCode]);
 
+  useEffect(() => {
+    if (!translationApprovalEnabled && (filterMode === "needs-approval" || filterMode === "approved")) {
+      setFilterMode("all");
+    }
+  }, [filterMode, translationApprovalEnabled]);
+
+  useEffect(() => {
+    const node = resultsRef.current;
+    if (!node) {
+      return undefined;
+    }
+
+    const updateViewportHeight = () => {
+      setViewportHeight(node.clientHeight || 720);
+    };
+
+    updateViewportHeight();
+    const resizeObserver = new ResizeObserver(updateViewportHeight);
+    resizeObserver.observe(node);
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, []);
+
+  useEffect(() => {
+    setScrollTop(0);
+    resultsRef.current?.scrollTo({ top: 0 });
+  }, [projectId, languageCode, deferredSearchQuery, filterMode]);
+
   const editorLanguage = useMemo(
     () => project?.languages.find((language) => language.code === languageCode) || null,
     [project, languageCode],
+  );
+
+  const savedRowMap = useMemo(
+    () => new Map((editorData?.rows || []).map((row) => [row.key, row])),
+    [editorData],
+  );
+
+  const canEdit = roleAllows(user, "editor");
+  const hasUnsavedChanges = canEdit && dirtyKeys.size > 0;
+
+  const syncDirtyStateForRow = useCallback(
+    (key, nextTranslation, nextApproved) => {
+      const savedRow = savedRowMap.get(key);
+      if (!savedRow) {
+        return;
+      }
+
+      const savedTranslation = String(savedRow.translation ?? "");
+      const translationsChanged = nextTranslation !== savedTranslation;
+      const approvalsChanged =
+        translationApprovalEnabled && !editorData?.isSourceLanguage
+          ? Boolean(nextApproved) !== Boolean(savedRow.approved)
+          : false;
+
+      setDirtyKeys((current) => {
+        const next = new Set(current);
+        if (translationsChanged || approvalsChanged) {
+          next.add(key);
+        } else {
+          next.delete(key);
+        }
+        return next;
+      });
+    },
+    [editorData?.isSourceLanguage, savedRowMap, translationApprovalEnabled],
+  );
+
+  const handleTranslationChange = useCallback(
+    (key, nextValue) => {
+      const savedRow = savedRowMap.get(key);
+      const nextApproved = nextValue === String(savedRow?.translation ?? "") ? Boolean(savedRow?.approved) : false;
+
+      setEditorDraft((current) => {
+        if (current[key] === nextValue) {
+          return current;
+        }
+
+        return {
+          ...current,
+          [key]: nextValue,
+        };
+      });
+      setEditorApprovalDraft((current) => {
+        if (current[key] === nextApproved) {
+          return current;
+        }
+
+        return {
+          ...current,
+          [key]: nextApproved,
+        };
+      });
+      syncDirtyStateForRow(key, nextValue, nextApproved);
+    },
+    [savedRowMap, syncDirtyStateForRow],
+  );
+
+  const handleApprovalChange = useCallback(
+    (key, nextApproved) => {
+      const currentTranslation = String(editorDraft[key] ?? savedRowMap.get(key)?.translation ?? "");
+
+      setEditorApprovalDraft((current) => {
+        if (current[key] === nextApproved) {
+          return current;
+        }
+
+        return {
+          ...current,
+          [key]: nextApproved,
+        };
+      });
+      syncDirtyStateForRow(key, currentTranslation, nextApproved);
+    },
+    [editorDraft, savedRowMap, syncDirtyStateForRow],
+  );
+
+  const handleMemoryApply = useCallback(
+    (key, memory) => {
+      setEditorDraft((current) => {
+        if (current[key] === memory) {
+          return current;
+        }
+
+        return {
+          ...current,
+          [key]: memory,
+        };
+      });
+      setEditorApprovalDraft((current) => {
+        if (current[key] === false) {
+          return current;
+        }
+
+        return {
+          ...current,
+          [key]: false,
+        };
+      });
+      syncDirtyStateForRow(key, memory, false);
+    },
+    [syncDirtyStateForRow],
+  );
+
+  const blocker = useBlocker(hasUnsavedChanges);
+
+  useEffect(() => {
+    if (blocker.state !== "blocked") {
+      return;
+    }
+
+    const shouldLeave = window.confirm("You have unsaved changes. Do you really want to leave the editor?");
+    if (shouldLeave) {
+      blocker.proceed();
+    } else {
+      blocker.reset();
+    }
+  }, [blocker]);
+
+  useBeforeUnload(
+    useMemo(
+      () => (event) => {
+        if (!hasUnsavedChanges) {
+          return;
+        }
+
+        event.preventDefault();
+        event.returnValue = "";
+      },
+      [hasUnsavedChanges],
+    ),
   );
 
   const filteredRows = useMemo(() => {
@@ -78,7 +327,7 @@ function EditorPage() {
       const sourceValue = sourceText.toLowerCase();
       const translatedValue = String(editorDraft[row.key] ?? row.translation ?? "");
       const normalizedTranslation = translatedValue.toLowerCase();
-      const currentApproved = Boolean(editorApprovalDraft[row.key] ?? row.approved);
+      const currentApproved = translationApprovalEnabled && Boolean(editorApprovalDraft[row.key] ?? row.approved);
       const isTranslated = translatedValue.trim() !== "";
       const isIdenticalToSource = isTranslated && translatedValue === sourceText;
       const isChanged =
@@ -124,6 +373,24 @@ function EditorPage() {
     });
   }, [deferredSearchQuery, editorApprovalDraft, editorData, editorDraft, filterMode]);
 
+  const visibleRange = useMemo(() => {
+    const startIndex = Math.max(0, Math.floor(scrollTop / VIRTUAL_ROW_HEIGHT) - VIRTUAL_OVERSCAN);
+    const visibleCount = Math.ceil(viewportHeight / VIRTUAL_ROW_HEIGHT) + VIRTUAL_OVERSCAN * 2;
+    const endIndex = Math.min(filteredRows.length, startIndex + visibleCount);
+
+    return {
+      startIndex,
+      endIndex,
+      topSpacerHeight: startIndex * VIRTUAL_ROW_HEIGHT,
+      bottomSpacerHeight: Math.max(0, (filteredRows.length - endIndex) * VIRTUAL_ROW_HEIGHT),
+    };
+  }, [filteredRows.length, scrollTop, viewportHeight]);
+
+  const visibleRows = useMemo(
+    () => filteredRows.slice(visibleRange.startIndex, visibleRange.endIndex),
+    [filteredRows, visibleRange.endIndex, visibleRange.startIndex],
+  );
+
   async function handleSaveTranslations() {
     if (!editorData) {
       return;
@@ -135,13 +402,17 @@ function EditorPage() {
       const result = await apiFetch(`/api/projects/${projectId}/languages/${languageCode}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ entries: editorDraft, approvals: editorApprovalDraft }),
+        body: JSON.stringify({
+          entries: editorDraft,
+          approvals: translationApprovalEnabled ? editorApprovalDraft : {},
+        }),
       });
 
       const editorDetails = await apiFetch(`/api/projects/${projectId}/languages/${languageCode}`);
       setEditorData(editorDetails);
       setEditorDraft(Object.fromEntries(editorDetails.rows.map((row) => [row.key, row.translation ?? ""])));
       setEditorApprovalDraft(Object.fromEntries(editorDetails.rows.map((row) => [row.key, Boolean(row.approved)])));
+      setDirtyKeys(new Set());
       showToast("success", `Saved. ${progressLabel(result.progress)}`);
     } catch (requestError) {
       showToast("error", requestError.message);
@@ -208,7 +479,7 @@ function EditorPage() {
 
           <label className="editor-filter">
             <select value={filterMode} onChange={(event) => setFilterMode(event.target.value)}>
-              {editorFilterOptions.map((option) => (
+              {availableFilterOptions.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>
@@ -223,77 +494,35 @@ function EditorPage() {
             <p className="muted">Try a different search term for the key, source text, or translation.</p>
           </div>
         ) : (
-          filteredRows.map((row) => (
-            <div className="editor-row" key={row.key}>
-              <label className="editor-field">
-                <span className="field-key">{row.key}</span>
-                <input readOnly value={String(row.source ?? "")} />
-              </label>
+          <div
+            ref={resultsRef}
+            className="editor-results"
+            onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+          >
+            {visibleRange.topSpacerHeight > 0 ? (
+              <div style={{ height: `${visibleRange.topSpacerHeight}px` }} aria-hidden="true" />
+            ) : null}
 
-              <label className="editor-field editor-field-editable">
-                <span className="field-key field-key-placeholder">{row.key}</span>
-                <input
-                  readOnly={!roleAllows(user, "editor")}
-                  value={String(editorDraft[row.key] ?? "")}
-                  onChange={(event) => {
-                    const nextValue = event.target.value;
-                    setEditorDraft((current) => ({
-                      ...current,
-                      [row.key]: nextValue,
-                    }));
-                    setEditorApprovalDraft((current) => ({
-                      ...current,
-                      [row.key]: nextValue === String(row.translation ?? "") ? Boolean(row.approved) : false,
-                    }));
-                  }}
-                />
+            {visibleRows.map((row) => (
+              <EditorRow
+                key={row.key}
+                row={row}
+                canEdit={canEdit}
+                isSourceLanguage={editorData.isSourceLanguage}
+                translationApprovalEnabled={translationApprovalEnabled}
+                translationMemoryEnabled={translationMemoryEnabled}
+                value={String(editorDraft[row.key] ?? "")}
+                approved={Boolean(editorApprovalDraft[row.key] ?? row.approved)}
+                onTranslationChange={handleTranslationChange}
+                onApprovalChange={handleApprovalChange}
+                onMemoryApply={handleMemoryApply}
+              />
+            ))}
 
-                <div className="editor-field-meta">
-                  {row.memories?.length ? (
-                    <div className="translation-memory-list">
-                      {row.memories.slice(0, 5).map((memory) => (
-                        <button
-                          key={`${row.key}-${memory}`}
-                          className="translation-memory-button"
-                          type="button"
-                          disabled={!roleAllows(user, "editor")}
-                          onClick={() => {
-                            setEditorDraft((current) => ({
-                              ...current,
-                              [row.key]: memory,
-                            }));
-                            setEditorApprovalDraft((current) => ({
-                              ...current,
-                              [row.key]: false,
-                            }));
-                          }}
-                        >
-                          {memory}
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  {!editorData.isSourceLanguage ? (
-                    <label className="editor-approval-toggle">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(editorApprovalDraft[row.key] ?? row.approved)}
-                        disabled={!roleAllows(user, "editor") || String(editorDraft[row.key] ?? "").trim() === ""}
-                        onChange={(event) =>
-                          setEditorApprovalDraft((current) => ({
-                            ...current,
-                            [row.key]: event.target.checked,
-                          }))
-                        }
-                      />
-                      <span>Approved</span>
-                    </label>
-                  ) : null}
-                </div>
-              </label>
-            </div>
-          ))
+            {visibleRange.bottomSpacerHeight > 0 ? (
+              <div style={{ height: `${visibleRange.bottomSpacerHeight}px` }} aria-hidden="true" />
+            ) : null}
+          </div>
         )}
       </div>
     </section>

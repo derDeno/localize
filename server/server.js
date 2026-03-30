@@ -632,6 +632,8 @@ async function getAppSettings(client = pool) {
         allow_user_profile_edit,
         allow_project_delete,
         allow_language_delete,
+        translation_approval_enabled,
+        translation_memory_enabled,
         sso_enabled,
         sso_provider,
         sso_issuer_url,
@@ -659,6 +661,8 @@ async function getAppSettings(client = pool) {
     allowUserProfileEdit: Boolean(row?.allow_user_profile_edit ?? true),
     allowProjectDelete: Boolean(row?.allow_project_delete),
     allowLanguageDelete: Boolean(row?.allow_language_delete),
+    translationApprovalEnabled: Boolean(row?.translation_approval_enabled ?? true),
+    translationMemoryEnabled: Boolean(row?.translation_memory_enabled ?? true),
     sso: {
       enabled: Boolean(row?.sso_enabled),
       provider: row?.sso_provider || "",
@@ -1379,6 +1383,27 @@ async function buildProjectSummary(projectId, client = pool) {
   const { project, languages, entryMaps } = await getProjectData(projectId, client);
   const sourceEntries = entryMaps[project.source_language] || {};
 
+  const languagesWithStats = await Promise.all(
+    languages.map(async (language) => {
+      if (language.is_source) {
+        return {
+          ...normalizeLanguageInfo(language),
+          progress: countProgress(sourceEntries, entryMaps[language.code] || {}),
+          approvalCount: 0,
+        };
+      }
+
+      const records = await getTranslationRecords(projectId, language.id, client);
+      const approvalCount = records.filter((record) => String(record.value || "").trim() !== "" && record.approved).length;
+
+      return {
+        ...normalizeLanguageInfo(language),
+        progress: countProgress(sourceEntries, entryMaps[language.code] || {}),
+        approvalCount,
+      };
+    }),
+  );
+
   return {
     id: project.id,
     name: project.name,
@@ -1388,10 +1413,7 @@ async function buildProjectSummary(projectId, client = pool) {
     createdAt: project.created_at,
     updatedAt: project.updated_at,
     currentRevision: project.current_revision,
-    languages: languages.map((language) => ({
-      ...normalizeLanguageInfo(language),
-      progress: countProgress(sourceEntries, entryMaps[language.code] || {}),
-    })),
+    languages: languagesWithStats,
   };
 }
 
@@ -1492,8 +1514,13 @@ async function upsertTranslations(projectId, language, entries, userId, client) 
   }
 }
 
-async function updateTranslationApprovals(projectId, language, approvals, userId, client) {
+async function updateTranslationApprovals(projectId, language, approvals, userId, client, appSettings) {
   if (language.is_source) {
+    return false;
+  }
+
+  const resolvedAppSettings = appSettings || (await getAppSettings(client));
+  if (resolvedAppSettings.translationApprovalEnabled === false) {
     return false;
   }
 
@@ -1527,8 +1554,21 @@ async function updateTranslationApprovals(projectId, language, approvals, userId
   return changed;
 }
 
-async function syncTranslationMemory(sourceLanguageCode, targetLanguageCode, sourceEntries, translatedEntries, userId, client) {
+async function syncTranslationMemory(
+  sourceLanguageCode,
+  targetLanguageCode,
+  sourceEntries,
+  translatedEntries,
+  userId,
+  client,
+  appSettings,
+) {
   if (!sourceLanguageCode || !targetLanguageCode || sourceLanguageCode === targetLanguageCode) {
+    return;
+  }
+
+  const resolvedAppSettings = appSettings || (await getAppSettings(client));
+  if (resolvedAppSettings.translationMemoryEnabled === false) {
     return;
   }
 
@@ -1700,6 +1740,7 @@ function normalizeEntryPayload(entries) {
 async function updateProjectLanguageEntries(projectId, languageCode, entries, actorId, client) {
   const normalizedLanguageCode = String(languageCode || "").trim().toLowerCase();
   const project = await getProjectRow(projectId, client);
+  const appSettings = await getAppSettings(client);
   const sourceLanguage = await getLanguageRow(projectId, project.source_language, client);
   const targetLanguage = await getLanguageRow(projectId, normalizedLanguageCode, client);
   const submittedEntries = normalizeEntryPayload(entries);
@@ -1722,7 +1763,15 @@ async function updateProjectLanguageEntries(projectId, languageCode, entries, ac
         Object.keys(submittedEntries).map((key) => [key, String(existingEntries[key] ?? "")]),
       );
       await upsertTranslations(projectId, language, syncedEntries, actorId, client);
-      await syncTranslationMemory(project.source_language, language.code, submittedEntries, syncedEntries, actorId, client);
+      await syncTranslationMemory(
+        project.source_language,
+        language.code,
+        submittedEntries,
+        syncedEntries,
+        actorId,
+        client,
+        appSettings,
+      );
     }
   } else {
     const sourceEntries = await getTranslationEntries(projectId, sourceLanguage.id, client);
@@ -1730,7 +1779,15 @@ async function updateProjectLanguageEntries(projectId, languageCode, entries, ac
       Object.keys(sourceEntries).map((key) => [key, String(submittedEntries[key] ?? "")]),
     );
     await upsertTranslations(projectId, targetLanguage, safeEntries, actorId, client);
-    await syncTranslationMemory(project.source_language, targetLanguage.code, sourceEntries, safeEntries, actorId, client);
+    await syncTranslationMemory(
+      project.source_language,
+      targetLanguage.code,
+      sourceEntries,
+      safeEntries,
+      actorId,
+      client,
+      appSettings,
+    );
   }
 
   await persistProjectConfig(projectId, actorId, client);
@@ -1740,6 +1797,7 @@ async function updateProjectLanguageEntries(projectId, languageCode, entries, ac
 async function saveProjectLanguageEditorState(projectId, languageCode, entries, approvals, actorId, client) {
   const normalizedLanguageCode = String(languageCode || "").trim().toLowerCase();
   const project = await getProjectRow(projectId, client);
+  const appSettings = await getAppSettings(client);
   const sourceLanguage = await getLanguageRow(projectId, project.source_language, client);
   const targetLanguage = await getLanguageRow(projectId, normalizedLanguageCode, client);
   const sourceEntries = await getTranslationEntries(projectId, sourceLanguage.id, client);
@@ -1749,7 +1807,14 @@ async function saveProjectLanguageEditorState(projectId, languageCode, entries, 
   );
 
   await upsertTranslations(projectId, targetLanguage, safeEntries, actorId, client);
-  const approvalsChanged = await updateTranslationApprovals(projectId, targetLanguage, approvals, actorId, client);
+  const approvalsChanged = await updateTranslationApprovals(
+    projectId,
+    targetLanguage,
+    approvals,
+    actorId,
+    client,
+    appSettings,
+  );
   if (approvalsChanged) {
     await client.query(
       `
@@ -1763,7 +1828,15 @@ async function saveProjectLanguageEditorState(projectId, languageCode, entries, 
       [targetLanguage.id, projectId, actorId || null],
     );
   }
-  await syncTranslationMemory(project.source_language, targetLanguage.code, sourceEntries, safeEntries, actorId, client);
+  await syncTranslationMemory(
+    project.source_language,
+    targetLanguage.code,
+    sourceEntries,
+    safeEntries,
+    actorId,
+    client,
+    appSettings,
+  );
   await persistProjectConfig(projectId, actorId, client);
   await createProjectVersion(projectId, actorId, client);
 }
@@ -2325,6 +2398,8 @@ app.get("/api/settings/app", requireRole("admin"), async (_req, res, next) => {
       allowUserProfileEdit: settings.allowUserProfileEdit,
       allowProjectDelete: settings.allowProjectDelete,
       allowLanguageDelete: settings.allowLanguageDelete,
+      translationApprovalEnabled: settings.translationApprovalEnabled,
+      translationMemoryEnabled: settings.translationMemoryEnabled,
       updatedAt: settings.updatedAt,
     });
   } catch (error) {
@@ -2342,6 +2417,8 @@ app.patch("/api/settings/app", requireRole("admin"), async (req, res, next) => {
           allow_user_profile_edit = $2,
           allow_project_delete = $3,
           allow_language_delete = $4,
+          translation_approval_enabled = $5,
+          translation_memory_enabled = $6,
           updated_at = NOW()
         WHERE id = TRUE
       `,
@@ -2350,6 +2427,8 @@ app.patch("/api/settings/app", requireRole("admin"), async (req, res, next) => {
         Boolean(req.body.allowUserProfileEdit),
         Boolean(req.body.allowProjectDelete),
         Boolean(req.body.allowLanguageDelete),
+        Boolean(req.body.translationApprovalEnabled ?? true),
+        Boolean(req.body.translationMemoryEnabled ?? true),
       ],
     );
 
@@ -2932,6 +3011,7 @@ app.patch("/api/projects/:projectId/source", requireRole("editor"), async (req, 
 
 app.get("/api/projects/:projectId/languages/:languageCode", requireAuth, async (req, res, next) => {
   try {
+    const appSettings = await getAppSettings();
     const project = await getProjectRow(req.params.projectId);
     const sourceLanguage = await getLanguageRow(req.params.projectId, project.source_language);
     const targetLanguage = await getLanguageRow(req.params.projectId, req.params.languageCode);
@@ -2941,11 +3021,14 @@ app.get("/api/projects/:projectId/languages/:languageCode", requireAuth, async (
     const translationEntries = Object.fromEntries(targetRecords.map((row) => [row.key, row.value]));
     const sourceRecordMap = new Map(sourceRecords.map((row) => [row.key, row]));
     const targetRecordMap = new Map(targetRecords.map((row) => [row.key, row]));
-    const memoryMap = await getTranslationMemoryMap(
-      project.source_language,
-      targetLanguage.code,
-      [...new Set(sourceRecords.map((row) => row.value).filter(Boolean))],
-    );
+    const memoryMap =
+      appSettings.translationMemoryEnabled === false
+        ? {}
+        : await getTranslationMemoryMap(
+            project.source_language,
+            targetLanguage.code,
+            [...new Set(sourceRecords.map((row) => row.value).filter(Boolean))],
+          );
 
     const rows = Object.keys(sourceEntries)
       .sort((a, b) => a.localeCompare(b))
@@ -2958,7 +3041,7 @@ app.get("/api/projects/:projectId/languages/:languageCode", requireAuth, async (
           key,
           source: sourceValue,
           translation: translationEntries[key] ?? "",
-          approved: Boolean(targetRecord?.approved),
+          approved: appSettings.translationApprovalEnabled === false ? false : Boolean(targetRecord?.approved),
           sourceUpdatedAt: sourceRecord?.valueUpdatedAt || sourceRecord?.updatedAt || null,
           translationUpdatedAt: targetRecord?.valueUpdatedAt || null,
           memories: (memoryMap[sourceValue] || []).filter(Boolean),

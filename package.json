@@ -1,6 +1,6 @@
 {
   "name": "localize",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Modern i18n JSON translation workspace",
   "main": "server/server.js",
   "scripts": {

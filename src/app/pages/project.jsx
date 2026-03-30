@@ -32,6 +32,7 @@ function ProjectPage() {
   const [languageToDelete, setLanguageToDelete] = useState(null);
   const [languageActionMenu, setLanguageActionMenu] = useState(null);
   const [busy, setBusy] = useState(false);
+  const translationApprovalEnabled = settings?.translationApprovalEnabled !== false;
 
   const availableLanguages = useMemo(() => {
     if (!project) {
@@ -378,6 +379,9 @@ function ProjectPage() {
                       <span className="progress-label">Translation progress</span>
                       <span className="muted progress-stats">
                         Translated: {language.progress.completed} · Total: {language.progress.total}
+                        {!language.isSource && translationApprovalEnabled
+                          ? ` · Approved: ${language.approvalCount || 0}`
+                          : ""}
                       </span>
                     </div>
                     <div
