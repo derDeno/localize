@@ -1586,15 +1586,22 @@ function SsoSettingsTab() {
             />
           </label>
 
-          <label>
-            <span>Issuer URL</span>
-            <input
-              value={form.issuerUrl}
-              onChange={(event) => setForm((current) => ({ ...current, issuerUrl: event.target.value }))}
-              placeholder="https://identity.example.com/realm-or-tenant"
-              required={form.enabled}
-            />
-          </label>
+          <div className="field-with-helper">
+            <label>
+              <span>Issuer URL</span>
+              <input
+                value={form.issuerUrl}
+                onChange={(event) => setForm((current) => ({ ...current, issuerUrl: event.target.value }))}
+                placeholder="https://identity.example.com/realm-or-tenant"
+                required={form.enabled}
+              />
+            </label>
+
+            <p className="helper-text">
+              Enter the issuer base URL only, not the
+              <code> /.well-known/openid-configuration</code> document URL.
+            </p>
+          </div>
 
           <div className="split-grid">
             <label>
@@ -1627,22 +1634,18 @@ function SsoSettingsTab() {
             />
           </label>
 
-          <label>
-            <span>OAuth callback / redirect URL</span>
-            <input readOnly value={callbackUrl} />
-          </label>
+          <div className="field-with-helper">
+            <label>
+              <span>OAuth callback / redirect URL</span>
+              <input readOnly value={callbackUrl} />
+            </label>
 
-          <p className="helper-text">
-            Enter the issuer base URL only, not the
-            <code> /.well-known/openid-configuration</code> document URL. If you paste the full discovery URL, the
-            app will trim it automatically.
-          </p>
-
-          <p className="helper-text">
-            Register this exact URL in your OpenID Connect provider. The app starts sign-in at
-            <code> /api/auth/sso/start</code> and completes it at <code> /api/auth/sso/callback</code>. Add
-            <code> groups</code> to the scopes above if your provider requires it for role mapping claims.
-          </p>
+            <p className="helper-text">
+              Register this exact URL in your OpenID Connect provider. The app starts sign-in at
+              <code> /api/auth/sso/start</code> and completes it at <code> /api/auth/sso/callback</code>. Add
+              <code> groups</code> to the scopes above if your provider requires it for role mapping claims.
+            </p>
+          </div>
 
           <label className="toggle-row">
             <input

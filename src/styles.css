@@ -285,6 +285,11 @@ input[type="checkbox"]:hover {
   width: auto;
 }
 
+.sso-settings-form .field-with-helper {
+  display: grid;
+  gap: 8px;
+}
+
 .cards-grid {
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
 }
