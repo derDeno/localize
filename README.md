@@ -41,9 +41,12 @@ The app container supports these main environment variables:
 - `POSTGRES_PASSWORD`
 - `DATABASE_URL` as an override if you prefer one connection string
 - `SESSION_SECRET`
+- `PUBLIC_APP_URL` to pin the external app URL when you run behind a reverse proxy. This is especially important for SSO so the generated callback URL matches the one configured at your identity provider.
 - `SESSION_COOKIE_SECURE` to force secure cookies on or off. Set this to `false` when you serve the Docker app over plain `http://`.
 - `ADMIN_EMAIL`
 - `ADMIN_PASSWORD`
+
+For SSO, enter the issuer base URL in settings, for example `https://id.example.com/realms/main`. Do not enter the full `/.well-known/openid-configuration` URL. If you do paste the discovery URL, the app now trims it automatically before saving.
 
 
 ## GitHub workflow uploads

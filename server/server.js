@@ -266,6 +266,25 @@ function normalizeReturnTo(value) {
   return candidate;
 }
 
+function normalizeSsoIssuerUrl(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\/+$/g, "")
+    .replace(/\/\.well-known\/openid-configuration$/i, "");
+}
+
+function redirectToSsoStatus(res, reason, detail) {
+  const params = new URLSearchParams();
+  params.set("reason", String(reason || "signin-failed"));
+
+  const normalizedDetail = String(detail || "").trim();
+  if (normalizedDetail) {
+    params.set("detail", normalizedDetail.slice(0, 300));
+  }
+
+  return res.redirect(`/sso-status?${params.toString()}`);
+}
+
 function splitClaimValues(value) {
   if (Array.isArray(value)) {
     return value.flatMap((item) => splitClaimValues(item));
@@ -321,11 +340,10 @@ function getUserNamesFromClaims(claims) {
 
   const fullName = String(claims?.name || "").trim();
   if (fullName) {
-    const parts = fullName.split(/\s+/).filter(Boolean);
-    return {
-      firstName: parts[0] || "SSO",
-      lastName: parts.slice(1).join(" ") || "User",
-    };
+    return getUserNamesFromFullName(
+      fullName,
+      String(claims?.email || claims?.preferred_username || claims?.upn || "").trim(),
+    );
   }
 
   const email = String(claims?.email || claims?.preferred_username || claims?.upn || "").trim();
@@ -339,6 +357,62 @@ function getUserNamesFromClaims(claims) {
   return {
     firstName: "SSO",
     lastName: "User",
+  };
+}
+
+function getUserNamesFromFullName(fullName, email) {
+  const parts = String(fullName || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (parts.length === 2) {
+    return {
+      firstName: parts[0],
+      lastName: parts[1],
+    };
+  }
+
+  if (parts.length > 2) {
+    const localPart = String(email || "")
+      .trim()
+      .toLowerCase()
+      .split("@")[0];
+    const emailSegments = localPart
+      .split(".")
+      .map((segment) => segment.trim())
+      .filter(Boolean);
+
+    if (emailSegments.length >= 2) {
+      const normalizedParts = parts.map((part) => part.toLowerCase().replace(/[^\p{L}\p{N}]/gu, ""));
+      const emailPrefix = emailSegments.slice(0, -1).join("").replace(/[^\p{L}\p{N}]/gu, "");
+      const emailSuffix = emailSegments[emailSegments.length - 1].replace(/[^\p{L}\p{N}]/gu, "");
+
+      for (let index = 1; index < parts.length; index += 1) {
+        const rightSide = normalizedParts.slice(index).join("");
+        if (rightSide === emailSuffix) {
+          return {
+            firstName: parts.slice(0, index).join(" "),
+            lastName: parts.slice(index).join(" "),
+          };
+        }
+      }
+
+      for (let index = 1; index < parts.length; index += 1) {
+        const leftSide = normalizedParts.slice(0, index).join("");
+        if (leftSide === emailPrefix) {
+          return {
+            firstName: parts.slice(0, index).join(" "),
+            lastName: parts.slice(index).join(" "),
+          };
+        }
+      }
+    }
+  }
+
+  return {
+    firstName: parts.join(" ") || "SSO",
+    lastName: "",
   };
 }
 
@@ -555,8 +629,11 @@ async function getAppSettings(client = pool) {
     `
       SELECT
         allow_registration,
+        allow_user_profile_edit,
         allow_project_delete,
         allow_language_delete,
+        translation_approval_enabled,
+        translation_memory_enabled,
         sso_enabled,
         sso_provider,
         sso_issuer_url,
@@ -581,8 +658,11 @@ async function getAppSettings(client = pool) {
 
   return {
     allowRegistration: Boolean(row?.allow_registration),
+    allowUserProfileEdit: Boolean(row?.allow_user_profile_edit ?? true),
     allowProjectDelete: Boolean(row?.allow_project_delete),
     allowLanguageDelete: Boolean(row?.allow_language_delete),
+    translationApprovalEnabled: Boolean(row?.translation_approval_enabled ?? true),
+    translationMemoryEnabled: Boolean(row?.translation_memory_enabled ?? true),
     sso: {
       enabled: Boolean(row?.sso_enabled),
       provider: row?.sso_provider || "",
@@ -611,7 +691,7 @@ async function getAppSettings(client = pool) {
 const oidcMetadataCache = new Map();
 
 async function getOidcMetadata(issuerUrl) {
-  const normalizedIssuer = String(issuerUrl || "").trim().replace(/\/+$/g, "");
+  const normalizedIssuer = normalizeSsoIssuerUrl(issuerUrl);
   if (!normalizedIssuer) {
     throw createError("The SSO issuer URL is required.", 400);
   }
@@ -622,9 +702,21 @@ async function getOidcMetadata(issuerUrl) {
   }
 
   const discoveryUrl = `${normalizedIssuer}/.well-known/openid-configuration`;
-  const response = await fetch(discoveryUrl);
+  let response;
+  try {
+    response = await fetch(discoveryUrl);
+  } catch (error) {
+    throw createError(
+      `The SSO issuer discovery document could not be loaded from ${discoveryUrl}: ${error?.message || "Network request failed."}`,
+      502,
+    );
+  }
+
   if (!response.ok) {
-    throw createError("The SSO issuer discovery document could not be loaded.", 502);
+    throw createError(
+      `The SSO issuer discovery document could not be loaded from ${discoveryUrl} (HTTP ${response.status}).`,
+      502,
+    );
   }
 
   const metadata = await response.json();
@@ -1098,6 +1190,75 @@ async function getTranslationEntries(projectId, languageId, client = pool) {
   return Object.fromEntries(result.rows.map((row) => [row.translation_key, row.value_text ?? ""]));
 }
 
+async function getTranslationRecords(projectId, languageId, client = pool) {
+  const result = await client.query(
+    `
+      SELECT
+        id,
+        translation_key,
+        value_text,
+        approved,
+        approved_at,
+        approved_by,
+        value_updated_at,
+        updated_at
+      FROM translations
+      WHERE project_id = $1
+        AND language_id = $2
+        AND deleted_at IS NULL
+      ORDER BY translation_key ASC
+    `,
+    [projectId, languageId],
+  );
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    key: row.translation_key,
+    value: row.value_text ?? "",
+    approved: Boolean(row.approved),
+    approvedAt: row.approved_at,
+    approvedBy: row.approved_by,
+    valueUpdatedAt: row.value_updated_at,
+    updatedAt: row.updated_at,
+  }));
+}
+
+async function getTranslationMemoryMap(sourceLanguageCode, targetLanguageCode, sourceTexts, client = pool) {
+  if (
+    !sourceTexts.length ||
+    !sourceLanguageCode ||
+    !targetLanguageCode ||
+    sourceLanguageCode === targetLanguageCode
+  ) {
+    return {};
+  }
+
+  const result = await client.query(
+    `
+      SELECT source_text, translated_text
+      FROM translation_memories
+      WHERE source_language_code = $1
+        AND target_language_code = $2
+        AND source_text = ANY($3::text[])
+      ORDER BY updated_at DESC, translated_text ASC
+    `,
+    [sourceLanguageCode, targetLanguageCode, sourceTexts],
+  );
+
+  const memoryMap = {};
+  for (const row of result.rows) {
+    if (!memoryMap[row.source_text]) {
+      memoryMap[row.source_text] = [];
+    }
+
+    if (!memoryMap[row.source_text].includes(row.translated_text)) {
+      memoryMap[row.source_text].push(row.translated_text);
+    }
+  }
+
+  return memoryMap;
+}
+
 async function getProjectData(projectId, client = pool) {
   const project = await getProjectRow(projectId, client);
   const languages = await getProjectLanguages(projectId, client);
@@ -1222,6 +1383,27 @@ async function buildProjectSummary(projectId, client = pool) {
   const { project, languages, entryMaps } = await getProjectData(projectId, client);
   const sourceEntries = entryMaps[project.source_language] || {};
 
+  const languagesWithStats = await Promise.all(
+    languages.map(async (language) => {
+      if (language.is_source) {
+        return {
+          ...normalizeLanguageInfo(language),
+          progress: countProgress(sourceEntries, entryMaps[language.code] || {}),
+          approvalCount: 0,
+        };
+      }
+
+      const records = await getTranslationRecords(projectId, language.id, client);
+      const approvalCount = records.filter((record) => String(record.value || "").trim() !== "" && record.approved).length;
+
+      return {
+        ...normalizeLanguageInfo(language),
+        progress: countProgress(sourceEntries, entryMaps[language.code] || {}),
+        approvalCount,
+      };
+    }),
+  );
+
   return {
     id: project.id,
     name: project.name,
@@ -1231,10 +1413,7 @@ async function buildProjectSummary(projectId, client = pool) {
     createdAt: project.created_at,
     updatedAt: project.updated_at,
     currentRevision: project.current_revision,
-    languages: languages.map((language) => ({
-      ...normalizeLanguageInfo(language),
-      progress: countProgress(sourceEntries, entryMaps[language.code] || {}),
-    })),
+    languages: languagesWithStats,
   };
 }
 
@@ -1256,45 +1435,187 @@ async function listProjects() {
 }
 
 async function upsertTranslations(projectId, language, entries, userId, client) {
-  await client.query(
-    `
-      DELETE FROM translations
-      WHERE project_id = $1
-        AND language_id = $2
-    `,
-    [projectId, language.id],
-  );
+  const existingRows = await getTranslationRecords(projectId, language.id, client);
+  const existingByKey = new Map(existingRows.map((row) => [row.key, row]));
+  const nextKeys = new Set(Object.keys(entries));
+  let changed = false;
 
-  const keys = Object.keys(entries);
-  for (const key of keys) {
+  if (existingRows.length) {
+    const removedIds = existingRows.filter((row) => !nextKeys.has(row.key)).map((row) => row.id);
+    if (removedIds.length) {
+      changed = true;
+      await client.query("DELETE FROM translations WHERE id = ANY($1::uuid[])", [removedIds]);
+    }
+  }
+
+  for (const key of Object.keys(entries)) {
+    const value = stringifyValue(entries[key]);
+    const existing = existingByKey.get(key);
+
+    if (!existing) {
+      changed = true;
+      await client.query(
+        `
+          INSERT INTO translations (
+            id,
+            project_id,
+            language_id,
+            translation_key,
+            value_text,
+            value_type,
+            approved,
+            approved_at,
+            approved_by,
+            value_updated_at,
+            created_by,
+            updated_by
+          )
+          VALUES ($1, $2, $3, $4, $5, 'string', FALSE, NULL, NULL, NOW(), $6, $6)
+        `,
+        [crypto.randomUUID(), projectId, language.id, key, value, userId || null],
+      );
+      continue;
+    }
+
+    if (existing.value === value) {
+      continue;
+    }
+
+    changed = true;
     await client.query(
       `
-        INSERT INTO translations (
-          id,
-          project_id,
-          language_id,
-          translation_key,
-          value_text,
-          value_type,
-          created_by,
-          updated_by
-        )
-        VALUES ($1, $2, $3, $4, $5, 'string', $6, $6)
+        UPDATE translations
+        SET
+          value_text = $2,
+          approved = CASE WHEN $4 THEN approved ELSE FALSE END,
+          approved_at = CASE WHEN $4 THEN approved_at ELSE NULL END,
+          approved_by = CASE WHEN $4 THEN approved_by ELSE NULL END,
+          value_updated_at = NOW(),
+          updated_at = NOW(),
+          updated_by = $3
+        WHERE id = $1
       `,
-      [crypto.randomUUID(), projectId, language.id, key, stringifyValue(entries[key]), userId || null],
+      [existing.id, value, userId || null, Boolean(language.is_source)],
+    );
+  }
+
+  if (changed) {
+    await client.query(
+      `
+        UPDATE languages
+        SET
+          updated_at = NOW(),
+          updated_by = $3
+        WHERE id = $1
+          AND project_id = $2
+      `,
+      [language.id, projectId, userId || null],
+    );
+  }
+}
+
+async function updateTranslationApprovals(projectId, language, approvals, userId, client, appSettings) {
+  if (language.is_source) {
+    return false;
+  }
+
+  const resolvedAppSettings = appSettings || (await getAppSettings(client));
+  if (resolvedAppSettings.translationApprovalEnabled === false) {
+    return false;
+  }
+
+  const approvalMap = isPlainObject(approvals) ? approvals : {};
+  const rows = await getTranslationRecords(projectId, language.id, client);
+  let changed = false;
+
+  for (const row of rows) {
+    const hasTranslation = String(row.value ?? "").trim() !== "";
+    const nextApproved = hasTranslation && Boolean(approvalMap[row.key]);
+    if (nextApproved === row.approved) {
+      continue;
+    }
+
+    changed = true;
+    await client.query(
+      `
+        UPDATE translations
+        SET
+          approved = $2,
+          approved_at = CASE WHEN $2 THEN NOW() ELSE NULL END,
+          approved_by = CASE WHEN $2 THEN $3 ELSE NULL END,
+          updated_at = NOW(),
+          updated_by = $3
+        WHERE id = $1
+      `,
+      [row.id, nextApproved, userId || null],
+    );
+  }
+
+  return changed;
+}
+
+async function syncTranslationMemory(
+  sourceLanguageCode,
+  targetLanguageCode,
+  sourceEntries,
+  translatedEntries,
+  userId,
+  client,
+  appSettings,
+) {
+  if (!sourceLanguageCode || !targetLanguageCode || sourceLanguageCode === targetLanguageCode) {
+    return;
+  }
+
+  const resolvedAppSettings = appSettings || (await getAppSettings(client));
+  if (resolvedAppSettings.translationMemoryEnabled === false) {
+    return;
+  }
+
+  for (const [key, translatedValue] of Object.entries(translatedEntries)) {
+    const sourceText = String(sourceEntries[key] ?? "").trim();
+    const targetText = String(translatedValue ?? "").trim();
+
+    if (!sourceText || !targetText) {
+      continue;
+    }
+
+    await client.query(
+      `
+        INSERT INTO translation_memories (
+          id,
+          source_language_code,
+          target_language_code,
+          source_text,
+          translated_text,
+          created_by,
+          updated_by,
+          updated_at,
+          last_used_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $6, NOW(), NOW())
+        ON CONFLICT (source_language_code, target_language_code, source_text, translated_text)
+        DO UPDATE SET
+          updated_by = EXCLUDED.updated_by,
+          updated_at = NOW(),
+          last_used_at = NOW()
+      `,
+      [
+        crypto.randomUUID(),
+        sourceLanguageCode,
+        targetLanguageCode,
+        sourceText,
+        targetText,
+        userId || null,
+      ],
     );
   }
 
   await client.query(
     `
-      UPDATE languages
-      SET
-        updated_at = NOW(),
-        updated_by = $3
-      WHERE id = $1
-        AND project_id = $2
+      DELETE FROM translation_memories
+      WHERE translated_text = ''
     `,
-    [language.id, projectId, userId || null],
   );
 }
 
@@ -1419,6 +1740,7 @@ function normalizeEntryPayload(entries) {
 async function updateProjectLanguageEntries(projectId, languageCode, entries, actorId, client) {
   const normalizedLanguageCode = String(languageCode || "").trim().toLowerCase();
   const project = await getProjectRow(projectId, client);
+  const appSettings = await getAppSettings(client);
   const sourceLanguage = await getLanguageRow(projectId, project.source_language, client);
   const targetLanguage = await getLanguageRow(projectId, normalizedLanguageCode, client);
   const submittedEntries = normalizeEntryPayload(entries);
@@ -1441,6 +1763,15 @@ async function updateProjectLanguageEntries(projectId, languageCode, entries, ac
         Object.keys(submittedEntries).map((key) => [key, String(existingEntries[key] ?? "")]),
       );
       await upsertTranslations(projectId, language, syncedEntries, actorId, client);
+      await syncTranslationMemory(
+        project.source_language,
+        language.code,
+        submittedEntries,
+        syncedEntries,
+        actorId,
+        client,
+        appSettings,
+      );
     }
   } else {
     const sourceEntries = await getTranslationEntries(projectId, sourceLanguage.id, client);
@@ -1448,8 +1779,64 @@ async function updateProjectLanguageEntries(projectId, languageCode, entries, ac
       Object.keys(sourceEntries).map((key) => [key, String(submittedEntries[key] ?? "")]),
     );
     await upsertTranslations(projectId, targetLanguage, safeEntries, actorId, client);
+    await syncTranslationMemory(
+      project.source_language,
+      targetLanguage.code,
+      sourceEntries,
+      safeEntries,
+      actorId,
+      client,
+      appSettings,
+    );
   }
 
+  await persistProjectConfig(projectId, actorId, client);
+  await createProjectVersion(projectId, actorId, client);
+}
+
+async function saveProjectLanguageEditorState(projectId, languageCode, entries, approvals, actorId, client) {
+  const normalizedLanguageCode = String(languageCode || "").trim().toLowerCase();
+  const project = await getProjectRow(projectId, client);
+  const appSettings = await getAppSettings(client);
+  const sourceLanguage = await getLanguageRow(projectId, project.source_language, client);
+  const targetLanguage = await getLanguageRow(projectId, normalizedLanguageCode, client);
+  const sourceEntries = await getTranslationEntries(projectId, sourceLanguage.id, client);
+  const submittedEntries = normalizeEntryPayload(entries);
+  const safeEntries = Object.fromEntries(
+    Object.keys(sourceEntries).map((key) => [key, String(submittedEntries[key] ?? "")]),
+  );
+
+  await upsertTranslations(projectId, targetLanguage, safeEntries, actorId, client);
+  const approvalsChanged = await updateTranslationApprovals(
+    projectId,
+    targetLanguage,
+    approvals,
+    actorId,
+    client,
+    appSettings,
+  );
+  if (approvalsChanged) {
+    await client.query(
+      `
+        UPDATE languages
+        SET
+          updated_at = NOW(),
+          updated_by = $3
+        WHERE id = $1
+          AND project_id = $2
+      `,
+      [targetLanguage.id, projectId, actorId || null],
+    );
+  }
+  await syncTranslationMemory(
+    project.source_language,
+    targetLanguage.code,
+    sourceEntries,
+    safeEntries,
+    actorId,
+    client,
+    appSettings,
+  );
   await persistProjectConfig(projectId, actorId, client);
   await createProjectVersion(projectId, actorId, client);
 }
@@ -1474,11 +1861,11 @@ app.get("/api/auth/sso/start", async (req, res) => {
   try {
     const settings = await getAppSettings();
     if (!settings.sso.enabled) {
-      return res.redirect(`/sso-status?reason=${encodeURIComponent("not-configured")}`);
+      return redirectToSsoStatus(res, "not-configured");
     }
 
     if (!settings.sso.issuerUrl || !settings.sso.clientId) {
-      return res.redirect(`/sso-status?reason=${encodeURIComponent("not-configured")}`);
+      return redirectToSsoStatus(res, "not-configured");
     }
 
     const metadata = await getOidcMetadata(settings.sso.issuerUrl);
@@ -1516,7 +1903,7 @@ app.get("/api/auth/sso/start", async (req, res) => {
     return res.redirect(authorizationUrl.toString());
   } catch (error) {
     console.error(error);
-    return res.redirect(`/sso-status?reason=${encodeURIComponent("signin-failed")}`);
+    return redirectToSsoStatus(res, "signin-failed", error?.message);
   }
 });
 
@@ -1534,18 +1921,22 @@ app.get("/api/auth/sso/callback", async (req, res) => {
     clearTransactionCookie();
 
     if (!transaction || transaction.type !== "sso") {
-      return res.redirect(`/sso-status?reason=${encodeURIComponent("session-expired")}`);
+      return redirectToSsoStatus(res, "session-expired");
     }
 
     if (req.query.error) {
-      return res.redirect(`/sso-status?reason=${encodeURIComponent("signin-failed")}`);
+      return redirectToSsoStatus(
+        res,
+        "signin-failed",
+        req.query.error_description || req.query.error || "The identity provider rejected the sign-in request.",
+      );
     }
 
     const code = String(req.query.code || "").trim();
     const state = String(req.query.state || "").trim();
 
     if (!code || !state || state !== transaction.state) {
-      return res.redirect(`/sso-status?reason=${encodeURIComponent("state-mismatch")}`);
+      return redirectToSsoStatus(res, "state-mismatch");
     }
 
     const settings = await getAppSettings();
@@ -1593,7 +1984,7 @@ app.get("/api/auth/sso/callback", async (req, res) => {
       reason = "role-mapping-missing";
     }
 
-    return res.redirect(`/sso-status?reason=${encodeURIComponent(reason)}`);
+    return redirectToSsoStatus(res, reason, message);
   }
 });
 
@@ -1715,6 +2106,11 @@ app.get("/api/auth/me", requireAuth, (req, res) => {
 
 app.patch("/api/auth/profile", requireAuth, async (req, res, next) => {
   try {
+    const settings = await getAppSettings();
+    if (req.currentUser.role !== "admin" && !settings.allowUserProfileEdit) {
+      return res.status(403).json({ message: "Profile editing is currently disabled for non-admin users." });
+    }
+
     const firstName = String(req.body.firstName || "").trim();
     const lastName = String(req.body.lastName || "").trim();
     const email = String(req.body.email || "").trim().toLowerCase();
@@ -1999,8 +2395,11 @@ app.get("/api/settings/app", requireRole("admin"), async (_req, res, next) => {
     const settings = await getAppSettings();
     res.json({
       allowRegistration: settings.allowRegistration,
+      allowUserProfileEdit: settings.allowUserProfileEdit,
       allowProjectDelete: settings.allowProjectDelete,
       allowLanguageDelete: settings.allowLanguageDelete,
+      translationApprovalEnabled: settings.translationApprovalEnabled,
+      translationMemoryEnabled: settings.translationMemoryEnabled,
       updatedAt: settings.updatedAt,
     });
   } catch (error) {
@@ -2015,15 +2414,21 @@ app.patch("/api/settings/app", requireRole("admin"), async (req, res, next) => {
         UPDATE app_settings
         SET
           allow_registration = $1,
-          allow_project_delete = $2,
-          allow_language_delete = $3,
+          allow_user_profile_edit = $2,
+          allow_project_delete = $3,
+          allow_language_delete = $4,
+          translation_approval_enabled = $5,
+          translation_memory_enabled = $6,
           updated_at = NOW()
         WHERE id = TRUE
       `,
       [
         Boolean(req.body.allowRegistration),
+        Boolean(req.body.allowUserProfileEdit),
         Boolean(req.body.allowProjectDelete),
         Boolean(req.body.allowLanguageDelete),
+        Boolean(req.body.translationApprovalEnabled ?? true),
+        Boolean(req.body.translationMemoryEnabled ?? true),
       ],
     );
 
@@ -2045,7 +2450,7 @@ app.patch("/api/settings/sso", requireRole("admin"), async (req, res, next) => {
   try {
     const enabled = Boolean(req.body.enabled);
     const provider = String(req.body.provider || "").trim();
-    const issuerUrl = String(req.body.issuerUrl || "").trim();
+    const issuerUrl = normalizeSsoIssuerUrl(req.body.issuerUrl);
     const clientId = String(req.body.clientId || "").trim();
     const clientSecret = String(req.body.clientSecret || "").trim();
     const scopes = String(req.body.scopes || "").trim();
@@ -2496,6 +2901,8 @@ app.post("/api/projects/:projectId/languages", requireRole("editor"), upload.sin
 
       const language = {
         id: crypto.randomUUID(),
+        code,
+        is_source: false,
       };
 
       await client.query(
@@ -2518,6 +2925,7 @@ app.post("/api/projects/:projectId/languages", requireRole("editor"), upload.sin
       );
 
       await upsertTranslations(req.params.projectId, language, entries, req.currentUser.id, client);
+      await syncTranslationMemory(project.source_language, code, sourceEntries, entries, req.currentUser.id, client);
       await persistProjectConfig(req.params.projectId, req.currentUser.id, client);
       await createProjectVersion(req.params.projectId, req.currentUser.id, client);
     });
@@ -2603,24 +3011,48 @@ app.patch("/api/projects/:projectId/source", requireRole("editor"), async (req, 
 
 app.get("/api/projects/:projectId/languages/:languageCode", requireAuth, async (req, res, next) => {
   try {
+    const appSettings = await getAppSettings();
     const project = await getProjectRow(req.params.projectId);
     const sourceLanguage = await getLanguageRow(req.params.projectId, project.source_language);
     const targetLanguage = await getLanguageRow(req.params.projectId, req.params.languageCode);
-    const sourceEntries = await getTranslationEntries(req.params.projectId, sourceLanguage.id);
-    const translationEntries = await getTranslationEntries(req.params.projectId, targetLanguage.id);
+    const sourceRecords = await getTranslationRecords(req.params.projectId, sourceLanguage.id);
+    const targetRecords = await getTranslationRecords(req.params.projectId, targetLanguage.id);
+    const sourceEntries = Object.fromEntries(sourceRecords.map((row) => [row.key, row.value]));
+    const translationEntries = Object.fromEntries(targetRecords.map((row) => [row.key, row.value]));
+    const sourceRecordMap = new Map(sourceRecords.map((row) => [row.key, row]));
+    const targetRecordMap = new Map(targetRecords.map((row) => [row.key, row]));
+    const memoryMap =
+      appSettings.translationMemoryEnabled === false
+        ? {}
+        : await getTranslationMemoryMap(
+            project.source_language,
+            targetLanguage.code,
+            [...new Set(sourceRecords.map((row) => row.value).filter(Boolean))],
+          );
 
     const rows = Object.keys(sourceEntries)
       .sort((a, b) => a.localeCompare(b))
-      .map((key) => ({
-        key,
-        source: sourceEntries[key] ?? "",
-        translation: translationEntries[key] ?? "",
-      }));
+      .map((key) => {
+        const sourceRecord = sourceRecordMap.get(key);
+        const targetRecord = targetRecordMap.get(key);
+        const sourceValue = sourceEntries[key] ?? "";
+
+        return {
+          key,
+          source: sourceValue,
+          translation: translationEntries[key] ?? "",
+          approved: appSettings.translationApprovalEnabled === false ? false : Boolean(targetRecord?.approved),
+          sourceUpdatedAt: sourceRecord?.valueUpdatedAt || sourceRecord?.updatedAt || null,
+          translationUpdatedAt: targetRecord?.valueUpdatedAt || null,
+          memories: (memoryMap[sourceValue] || []).filter(Boolean),
+        };
+      });
 
     res.json({
       projectId: req.params.projectId,
       sourceLanguage: project.source_language,
       languageCode: targetLanguage.code,
+      isSourceLanguage: targetLanguage.code === project.source_language,
       rows,
       progress: countProgress(sourceEntries, translationEntries),
     });
@@ -2632,13 +3064,27 @@ app.get("/api/projects/:projectId/languages/:languageCode", requireAuth, async (
 app.put("/api/projects/:projectId/languages/:languageCode", requireRole("editor"), async (req, res, next) => {
   try {
     await withTransaction(async (client) => {
-      await updateProjectLanguageEntries(
-        req.params.projectId,
-        req.params.languageCode,
-        req.body.entries,
-        req.currentUser.id,
-        client,
-      );
+      const project = await getProjectRow(req.params.projectId, client);
+      const targetLanguage = await getLanguageRow(req.params.projectId, req.params.languageCode, client);
+
+      if (targetLanguage.code === project.source_language) {
+        await updateProjectLanguageEntries(
+          req.params.projectId,
+          req.params.languageCode,
+          req.body.entries,
+          req.currentUser.id,
+          client,
+        );
+      } else {
+        await saveProjectLanguageEditorState(
+          req.params.projectId,
+          req.params.languageCode,
+          req.body.entries,
+          req.body.approvals,
+          req.currentUser.id,
+          client,
+        );
+      }
     });
 
     await syncProjectFiles(req.params.projectId);
@@ -2680,6 +3126,14 @@ app.post(
         );
 
         await upsertTranslations(req.params.projectId, targetLanguage, safeEntries, req.currentUser.id, client);
+        await syncTranslationMemory(
+          project.source_language,
+          targetLanguage.code,
+          sourceEntries,
+          safeEntries,
+          req.currentUser.id,
+          client,
+        );
         await client.query(
           `
             UPDATE languages
@@ -2774,7 +3228,14 @@ async function start() {
   });
 }
 
-start().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+if (require.main === module) {
+  start().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  getUserNamesFromClaims,
+  getUserNamesFromFullName,
+};
